@@ -113,10 +113,41 @@ Rules:
 | Audio event detection (abnormal sounds, impacts, glass, motors) | Audio classification model via **TensorFlow Lite / LiteRT** (e.g., YAMNet-class embeddings + thresholding) |
 | Visual event detection (fast motion, object movement/fall, person presence) | **MediaPipe** / LiteRT tasks (object detection + motion deltas between frames) |
 | Motion events (vibration spikes, shock, device/device-contact) | Native **SensorManager** (accelerometer, gyroscope) + simple peak detection |
-| Local LLM (structuring events, summaries, investigator reasoning) | **MediaPipe LLM Inference API** with a small model (e.g., Gemma 2B-class) running on iQOO's Snapdragon NPU/GPU delegate |
+| Local LLM (structuring events, summaries, investigator reasoning) | **LiteRT-LM (Kotlin API)** with Gemma-class models — backend decision researched & verified in §5.2 (MediaPipe LLM Inference API is maintenance-only as of late 2026) |
 | Event correlation & timeline logic | Deterministic Kotlin code (timestamp windows, causality heuristics) — cheap, reliable, debuggable |
 
 **Decision rule:** prefer the simplest sensor + threshold + small-model pipeline that works reliably on the demo device. Deterministic code > model wherever possible; models only where perception is genuinely needed (sound classification, motion detection, scene change).
+
+### 5.2 Local LLM selection — researched & verified (Sept 2026)
+
+**Runtime: LiteRT-LM** (`com.google.ai.edge.litertlm:litertlm-android`), Google's production-ready successor to the MediaPipe LLM Inference API (which is now maintenance-only). Verified capabilities: `Backend.CPU()`, `Backend.GPU()`, `Backend.NPU()` on Android; streaming via Kotlin Flow; built-in tool/function calling (constrained decoding); thinking-token budgeting; Multi-Token Prediction (MTP) for >2x decode speed on GPU.
+
+**Official benchmark data** (Google AI Edge, 2026) — the numbers that drive the decision:
+
+| Model | Size | Device | CPU prefill/decode (tk/s) | GPU prefill/decode (tk/s) | Notes |
+|---|---|---|---|---|---|
+| **Gemma4-E2B** | 2.58 GB | Samsung S26 Ultra | 557 / 47 | **3808 / 52** | TTFT 0.3s on GPU; peak mem 676 MB (GPU) vs 1733 MB (CPU) |
+| **Gemma3-1B** | 1.0 GB | Samsung S24 Ultra | 177 / 33 | **1191 / 24** | Smallest reliable option |
+| Qwen2.5-1.5B | 1.6 GB | Samsung S25 Ultra | 298 / 34 | 1668 / 31 | Alternative |
+| Gemma4-E4B | 3.65 GB | Samsung S26 Ultra | 195 / 18 | 1293 / 22 | Too slow for quality gain — rejected |
+| FunctionGemma | 289 MB | Samsung S25 Ultra | 2238 / 154 | — | Purpose-built function caller |
+
+**Decision for iQOO flagship (12–16 GB LPDDR5X, UFS 4.0, top-tier Snapdragon 8-series with Hexagon NPU + Adreno GPU):**
+
+1. **Primary: Gemma4-E2B via GPU backend + MTP enabled.** Fits comfortably in RAM/storage, ~50 tk/s decode = fluent chat, 0.3s TTFT = instant-feeling investigator, GPU cuts peak memory ~2.5x vs CPU. iQOO's Adreno GPU is the same performance class as the benchmarked Samsung S25/S26 Ultra devices.
+2. **Fallback A: Gemma3-1B GPU** — if E2B shows RAM pressure alongside the live pipeline, or demo device is a lower-tier iQOO.
+3. **Backend order: GPU → NPU → CPU.** GPU is the benchmark-backed path. The **NPU (Hexagon) backend exists in LiteRT-LM on Android** but requires bundling NPU native libraries and has no published benchmark table yet — treat as M0 experiment, not a dependency. CPU always works as the safe floor (~47 tk/s decode on E2B is still usable).
+4. **Enhancement path: FunctionGemma (289 MB) as a tool-caller** over the timeline DB (`get_events_between(t1,t2)`, `find_events(type=IMPACT)`) — deterministic retrieval as tools keeps the investigator grounded in real data and non-hallucinatory. Evaluate in M3 if plain retrieval-prompting is insufficient.
+
+**Architectural note:** the LLM is post-session (investigator) + summary generation, so it never competes with camera/mic/sensor pipelines during live monitoring. Pre-load the engine in the background near END SESSION (`engine.initialize()` takes up to ~10s — must run off the main thread).
+
+**M0 on-device verification checklist (do this first, on the actual iQOO phone):**
+- [ ] Load Gemma4-E2B + Gemma3-1B via LiteRT-LM; measure prefill/decode/TTFT/peak memory on GPU vs NPU vs CPU
+- [ ] Verify GPU backend (`libOpenCL.so` declared in manifest) on the iQOO's Adreno driver
+- [ ] Try `Backend.NPU()` with bundled Hexagon/QNN libs; record whether it beats GPU on prefill or battery
+- [ ] Enable MTP speculative decoding; measure decode gain
+- [ ] Soak test: 10-min session with detectors running, then LLM summary + 10 investigator questions; watch thermals/battery
+- [ ] Kill-file: if E2B misbehaves, ship 1B; if GPU driver is flaky, ship CPU
 
 ---
 

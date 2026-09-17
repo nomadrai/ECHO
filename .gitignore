@@ -1,0 +1,27 @@
+# Build output
+build/
+.gradle/
+captures/
+.cxx/
+
+# Local machine configuration (contains absolute SDK paths and secrets)
+local.properties
+*.keystore
+*.jks
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# On-device model artifacts (multi-GB, never commit)
+models/
+*.litertlm
+*.tflite
+*.task
+*.aar
+
+# Local session dumps / evidence pulled off the device
+sessions/
+*.wav

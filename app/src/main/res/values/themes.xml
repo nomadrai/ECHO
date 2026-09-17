@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose owns the real theming; this only needs to be a valid,
+         action-bar-free application theme. -->
+    <style name="Theme.Echo" parent="android:Theme.Material.NoActionBar" />
+</resources>
