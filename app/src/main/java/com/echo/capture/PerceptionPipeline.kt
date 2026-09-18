@@ -1,22 +1,31 @@
 package com.echo.capture
 
+import com.echo.core.model.Event
 import com.echo.core.model.Observation
 import com.echo.fusion.EventExtractor
 
 /**
- * Wires the three capture sources to the event extractor and the bus.
- * Kept tiny on purpose: sources stay dumb (measure + submit), the extractor
- * stays pure, and the bus is the only shared state.
+ * Wires the capture sources to the event extractor, the persistence store and
+ * the bus. Kept tiny on purpose: sources stay dumb (measure + submit), the
+ * extractor stays pure, and the bus is the only shared state.
+ *
+ * @param onEvent persistence hook — every extracted event is passed here
+ * (the service writes it to the session's SQLite row) *before* the bus
+ * update, so a crash can never lose an event the dashboard already showed.
  */
 class PerceptionPipeline(
     private val bus: SessionBus,
     private val extractor: EventExtractor = EventExtractor(),
+    private val onEvent: (Event) -> Unit = {},
 ) {
     /**
      * @param deviationSigma null while the channel's baseline is still
      * learning — the extractor emits nothing until the baseline is ready.
      */
     fun submit(observation: Observation, deviationSigma: Double?) {
-        extractor.onObservation(observation, deviationSigma).forEach(bus::addEvent)
+        extractor.onObservation(observation, deviationSigma).forEach { event ->
+            onEvent(event)
+            bus.addEvent(event)
+        }
     }
 }

@@ -51,7 +51,11 @@ import java.util.Locale
 private val WarningAmber = Color(0xFFFFC857)
 
 @Composable
-fun DashboardRoute(onBack: () -> Unit) {
+fun DashboardRoute(
+    onBack: () -> Unit,
+    onHistory: () -> Unit = {},
+    onApiSettings: () -> Unit = {},
+) {
     val context = LocalContext.current
     val state by SessionService.bus.state.collectAsState()
     DashboardScreen(
@@ -67,6 +71,8 @@ fun DashboardRoute(onBack: () -> Unit) {
             context.startService(intent)
         },
         onBack = onBack,
+        onHistory = onHistory,
+        onApiSettings = onApiSettings,
     )
 }
 
@@ -76,6 +82,8 @@ fun DashboardScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onBack: () -> Unit,
+    onHistory: () -> Unit = {},
+    onApiSettings: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -88,6 +96,8 @@ fun DashboardScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text("← Pre-flight") }
             Spacer(Modifier.weight(1f))
+            TextButton(onClick = onHistory) { Text("Previous sessions") }
+            Spacer(Modifier.width(4.dp))
             PhaseChip(state.phase)
         }
 
@@ -177,10 +187,22 @@ fun DashboardScreen(
 
         if (state.phase == SessionPhase.STOPPED && state.eventCount > 0) {
             SessionEndedCard(state)
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onHistory,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Investigate this session →")
+            }
             Spacer(Modifier.height(16.dp))
         }
 
         EventFeedCard(state)
+
+        Spacer(Modifier.height(12.dp))
+        TextButton(onClick = onApiSettings) {
+            Text("AI provider settings (API key) →")
+        }
 
         Spacer(Modifier.height(24.dp))
     }
@@ -375,8 +397,9 @@ private fun SessionEndedCard(state: SessionBusState) {
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "Timeline DB + evidence retention land in M1/M2; the AI " +
-                    "investigator arrives in M3.",
+                text = "All $state.eventCount events are saved to the session " +
+                    "database (files/echo/echo.db) — the timeline survives restarts " +
+                    "and feeds the AI investigator.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

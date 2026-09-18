@@ -19,8 +19,25 @@ sensors ──► Observation (σ-scored) ──► EventExtractor (named events
   baseline; every value is scored as deviation-in-σ from "normal"). Pure Kotlin, JVM-tested.
 - **Fusion layer** (`fusion/EventExtractor.kt`): σ-threshold rules map observations to **named
   event types** with dedup, sustained detection, and confidence tiers. Pure Kotlin, JVM-tested.
+- **Persistence** (`data/EchoStore.kt`): every extracted event is written synchronously to a
+  SQLite database at `files/echo/echo.db` (dedicated app-private folder) *before* it reaches
+  the dashboard — the timeline survives restarts and is the M3 investigator's data source.
 - Everything is fail-soft: a missing sensor, permission, or model degrades that one channel and
   the dashboard says so — the session never crashes.
+
+### Storage format
+
+`echo.db` is a two-table SQLite store, deliberately storage-efficient (no per-row JSON, no
+bloated ORM rows — ~120 bytes/event on disk):
+
+- `sessions(id, started_at_epoch_ms, ended_at_epoch_ms, duration_ms, device_meta)`
+- `events(id, session_id, runtime_id, t_start_ms, t_end_ms, type, modality_mask, tier,
+  confidence, salience, description)` with an index on `(session_id, t_start_ms)`
+
+Compact encodings: `modality_mask` is a 4-bit integer bitmask (`AUDIO=1, VISION=2, MOTION=4,
+ENVIRONMENT=8`, codec JVM-tested in `ModalityCodecTest`), `tier` is a 0–2 ordinal, times are
+epoch-ms INTEGERs. Verified on device: a 138 s session with 30 events stores in ~28 KB
+including schema, and reads back in timeline order via plain SQL.
 
 ## Sensor matrix — what each sensor is for
 
@@ -61,6 +78,22 @@ all of them are `SensorManager` channels plus the already-required camera/mic.
   every gust into a 5σ event.
 - **Tilt is deadband-scored, not σ-scored**: inside a 3° deadband the device counts as resting;
   `TILT_ANGLE` observations are only submitted beyond it.
+
+## Investigating a past session (history + AI chat)
+
+Every sealed session appears under **Previous sessions** on the dashboard. Tap one to open the
+**investigator chat**: a deterministic `DigestBuilder` turns that session's persisted events into
+a compact, citation-formatted digest, and your questions are answered over it.
+
+- **Local first:** the digest is built on-device by pure Kotlin; raw audio, frames and sensor
+  streams never leave the phone.
+- **External model (optional, user-configured):** add an API key under *AI provider settings*
+  for **Groq**, **Google AI Studio** or **OpenRouter** (all have free tiers). Keys are stored
+  app-private and sent only to the provider you chose. The system prompt enforces
+  citation-first, non-causal answers (`[E7 @ +00:36.104] … may have preceded …`).
+- **Local LLM roadmap (M3):** LiteRT-LM with Gemma3-1B int4 on LOW-tier devices / Gemma4-E2B on
+  the iQOO — the `DeviceProfile.llm` slot already exists. Until it lands, chat requires an
+  external key; the M12 has no NPU and would be single-digit tokens/s on CPU.
 
 ## What a demo looks like
 

@@ -21,6 +21,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Only for the optional, user-configured external AI investigator
+         (Groq / Google AI Studio / OpenRouter). Capture, storage and the
+         offline pipeline never touch the network. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Used only to take the user to the system battery-optimisation screen;
          a foreground service that the OS kills mid-session loses the demo. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />

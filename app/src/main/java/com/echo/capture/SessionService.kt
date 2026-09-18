@@ -18,6 +18,7 @@ import androidx.lifecycle.lifecycleScope
 import com.echo.R
 import com.echo.core.device.DeviceProfile
 import com.echo.core.time.SessionClock
+import com.echo.data.EchoStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -48,6 +49,9 @@ class SessionService : LifecycleService() {
     private var sensorSource: SensorSource? = null
     private var environmentSource: EnvironmentSource? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
+    /** DB row id of the session being recorded; 0 = none. */
+    private var activeSessionId: Long = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -130,7 +134,17 @@ class SessionService : LifecycleService() {
         clock = MonotonicClock()
         val profile = DeviceProfile.detect(this)
         val sessionBus = bus
-        val pipeline = PerceptionPipeline(sessionBus)
+        // Persistence: one session row per START; every extracted event is
+        // inserted synchronously before it reaches the dashboard, so the DB
+        // is always the source of truth for the timeline (plan §7).
+        val store = EchoStore.get(this)
+        activeSessionId = store.createSession(
+            startedAtEpochMs = System.currentTimeMillis(),
+            deviceMeta = "tier=${profile.tier},sdk=${profile.sdkInt},ram=${profile.describeRam}",
+        )
+        val pipeline = PerceptionPipeline(sessionBus) { event ->
+            store.insertEvent(activeSessionId, event)
+        }
         val sessionClock = clock ?: return
 
         bus.update {
@@ -183,6 +197,17 @@ class SessionService : LifecycleService() {
             return
         }
         bus.update { it.copy(phase = SessionPhase.STOPPING) }
+
+        val store = EchoStore.get(this)
+        if (activeSessionId > 0) {
+            store.endSession(
+                sessionId = activeSessionId,
+                endedAtEpochMs = System.currentTimeMillis(),
+                durationMs = bus.state.value.sessionMs,
+            )
+            Log.i(TAG, "session sealed: id=$activeSessionId")
+            activeSessionId = 0
+        }
 
         cameraSource?.stop()
         audioSource?.stop()
