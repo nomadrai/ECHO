@@ -27,6 +27,8 @@ data class SessionChatState(
     val sessionLabel: String = "",
     val digest: String = "",
     val eventCount: Int = 0,
+    /** What the user said they were building, shown above the chat. */
+    val goal: String = "",
     val messages: List<ChatMessage> = emptyList(),
     val busy: Boolean = false,
     val providerLabel: String = "",
@@ -51,15 +53,21 @@ class SessionChatViewModel(application: Application) : AndroidViewModel(applicat
 
     fun load(sessionId: Long) {
         if (_state.value.sessionId == sessionId && _state.value.digest.isNotEmpty()) return
+        val record = store.listSessions().firstOrNull { it.id == sessionId }
         val events: List<Event> = store.eventsForSession(sessionId)
-        val duration = sessionDuration(sessionId)
         val label = sessionLabel(sessionId)
-        val digest = DigestBuilder.build(events, label, duration)
+        val digest = DigestBuilder.build(
+            events = events,
+            sessionLabel = label,
+            durationMs = record?.durationMs ?: 0L,
+            goal = record?.goal ?: "",
+        )
         _state.value = SessionChatState(
             sessionId = sessionId,
             sessionLabel = label,
             digest = digest,
             eventCount = events.size,
+            goal = record?.goal ?: "",
             providerLabel = providerLabel(),
             apiKeyMissing = !apiSettings.isConfigured(),
         )
@@ -109,6 +117,14 @@ class SessionChatViewModel(application: Application) : AndroidViewModel(applicat
     fun providerLabel(): String {
         val p = apiSettings.provider
         return "${p.displayName} · ${apiSettings.modelFor(p)}"
+    }
+
+    /** Persists an edited goal and rebuilds the digest with it. */
+    fun updateGoal(goal: String) {
+        val current = _state.value
+        if (current.sessionId <= 0) return
+        store.updateGoal(current.sessionId, goal.trim())
+        load(current.sessionId)
     }
 
     private fun sessionDuration(sessionId: Long): Long =

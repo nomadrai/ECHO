@@ -19,16 +19,21 @@ object DigestBuilder {
     /**
      * @param sessionLabel human-facing label (id + wall-clock start)
      * @param durationMs sealed session duration, 0 if still open
+     * @param goal what the user said they were building; may be empty
      */
     fun build(
         events: List<Event>,
         sessionLabel: String,
         durationMs: Long,
         maxEvents: Int = 120,
+        goal: String = "",
     ): String {
         val buf = StringBuilder()
         buf.append("SESSION: ").append(sessionLabel).append('\n')
         buf.append("DURATION: ").append(SessionClock.formatOffset(durationMs)).append('\n')
+        if (goal.isNotBlank()) {
+            buf.append("USER'S STATED GOAL: ").append(goal.trim()).append('\n')
+        }
         if (events.isEmpty()) {
             buf.append("EVENTS: none detected in this session.\n")
             return buf.toString()

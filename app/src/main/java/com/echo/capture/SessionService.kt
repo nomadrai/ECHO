@@ -35,6 +35,9 @@ class SessionService : LifecycleService() {
         const val ACTION_START = "com.echo.action.START_SESSION"
         const val ACTION_STOP = "com.echo.action.STOP_SESSION"
 
+        /** What the user said they were building, captured before capture begins. */
+        const val EXTRA_GOAL = "com.echo.extra.SESSION_GOAL"
+
         private const val TAG = "EchoSession"
         private const val CHANNEL_ID = "echo_session"
         private const val NOTIFICATION_ID = 1
@@ -82,13 +85,13 @@ class SessionService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
-            ACTION_START -> startSession()
+            ACTION_START -> startSession(intent.getStringExtra(EXTRA_GOAL) ?: "")
             ACTION_STOP -> stopSession()
         }
         return START_STICKY
     }
 
-    private fun startSession() {
+    private fun startSession(goal: String) {
         val current = bus.state.value
         if (current.phase == SessionPhase.RECORDING || current.phase == SessionPhase.PREPARING) {
             return
@@ -141,6 +144,7 @@ class SessionService : LifecycleService() {
         activeSessionId = store.createSession(
             startedAtEpochMs = System.currentTimeMillis(),
             deviceMeta = "tier=${profile.tier},sdk=${profile.sdkInt},ram=${profile.describeRam}",
+            goal = goal,
         )
         val pipeline = PerceptionPipeline(sessionBus) { event ->
             store.insertEvent(activeSessionId, event)

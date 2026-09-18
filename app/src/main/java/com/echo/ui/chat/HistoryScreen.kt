@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echo.data.SessionRecord
 import java.text.SimpleDateFormat
@@ -40,6 +41,7 @@ import java.util.Locale
 fun HistoryScreen(
     onBack: () -> Unit,
     onOpenSession: (Long) -> Unit,
+    backLabel: String = "← Dashboard",
     viewModel: HistoryViewModel = viewModel(),
 ) {
     val sessions by viewModel.sessions.collectAsState()
@@ -54,7 +56,7 @@ fun HistoryScreen(
             .padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("← Dashboard") }
+            TextButton(onClick = onBack) { Text(backLabel) }
             Spacer(Modifier.weight(1f))
             TextButton(onClick = viewModel::refresh) { Text("Refresh") }
         }
@@ -128,6 +130,15 @@ private fun SessionRow(record: SessionRecord, onClick: () -> Unit) {
                 )
             }
             Spacer(Modifier.height(4.dp))
+            if (record.goal.isNotBlank()) {
+                Text(
+                    text = "Goal: ${record.goal}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Text(
                 text = "${record.eventCount} events",
                 style = MaterialTheme.typography.bodySmall,

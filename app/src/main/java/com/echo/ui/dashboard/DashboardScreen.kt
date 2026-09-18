@@ -28,9 +28,13 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,13 +62,27 @@ fun DashboardRoute(
 ) {
     val context = LocalContext.current
     val state by SessionService.bus.state.collectAsState()
+
+    // Ask what the user is building before every capture — the answer is
+    // stored with the session so the AI investigator knows what was supposed
+    // to happen, not just what the sensors saw.
+    var showGoalDialog by remember { mutableStateOf(false) }
+    if (showGoalDialog) {
+        SessionGoalDialog(
+            onDismiss = { showGoalDialog = false },
+            onConfirm = { goal ->
+                showGoalDialog = false
+                val intent = Intent(context, SessionService::class.java)
+                    .setAction(SessionService.ACTION_START)
+                    .putExtra(SessionService.EXTRA_GOAL, goal)
+                ContextCompat.startForegroundService(context, intent)
+            },
+        )
+    }
+
     DashboardScreen(
         state = state,
-        onStart = {
-            val intent = Intent(context, SessionService::class.java)
-                .setAction(SessionService.ACTION_START)
-            ContextCompat.startForegroundService(context, intent)
-        },
+        onStart = { showGoalDialog = true },
         onStop = {
             val intent = Intent(context, SessionService::class.java)
                 .setAction(SessionService.ACTION_STOP)
@@ -73,6 +91,43 @@ fun DashboardRoute(
         onBack = onBack,
         onHistory = onHistory,
         onApiSettings = onApiSettings,
+    )
+}
+
+@Composable
+private fun SessionGoalDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var goal by remember { mutableStateOf("") }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("What are you working on?") },
+        text = {
+            Column {
+                Text(
+                    text = "ECHO stores this with the session so the AI " +
+                        "investigator can judge what it detects against what " +
+                        "you were building.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = goal,
+                    onValueChange = { goal = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("e.g. line-following robot, motor rig under load…") },
+                    minLines = 2,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(goal.trim()) }) { Text("Start session") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
     )
 }
 

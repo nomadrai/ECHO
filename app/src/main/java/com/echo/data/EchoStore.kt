@@ -53,14 +53,25 @@ class EchoStore private constructor(private val dbFile: File) {
         db.execSQL(
             "CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, t_start_ms)",
         )
+        // Migration for stores created before the session-goal column existed.
+        // CREATE TABLE IF NOT EXISTS never alters an existing table, so the
+        // ALTER (duplicate-column error swallowed) is the upgrade path.
+        runCatching {
+            db.execSQL("ALTER TABLE sessions ADD COLUMN intent TEXT NOT NULL DEFAULT ''")
+        }
     }
 
-    /** Opens a session row; returns the persisted session id. */
+    /**
+     * Opens a session row; returns the persisted session id. [goal] is what
+     * the user said they were building — the investigator's context for
+     * judging what the detected events mean.
+     */
     @Synchronized
-    fun createSession(startedAtEpochMs: Long, deviceMeta: String): Long {
+    fun createSession(startedAtEpochMs: Long, deviceMeta: String, goal: String): Long {
         val values = ContentValues().apply {
             put("started_at_epoch_ms", startedAtEpochMs)
             put("device_meta", deviceMeta)
+            put("intent", goal)
         }
         return db.insert(TABLE_SESSIONS, null, values)
     }
@@ -118,7 +129,7 @@ class EchoStore private constructor(private val dbFile: File) {
         }
         val out = ArrayList<SessionRecord>()
         db.rawQuery(
-            "SELECT id, started_at_epoch_ms, ended_at_epoch_ms, duration_ms, device_meta " +
+            "SELECT id, started_at_epoch_ms, ended_at_epoch_ms, duration_ms, device_meta, intent " +
                 "FROM sessions WHERE ended_at_epoch_ms IS NOT NULL ORDER BY id DESC",
             null,
         ).use { c ->
@@ -131,6 +142,7 @@ class EchoStore private constructor(private val dbFile: File) {
                     deviceMeta = c.getString(4) ?: "",
                     eventCount = counts[c.getLong(0)] ?: 0,
                     eventTypes = types[c.getLong(0)] ?: "",
+                    goal = c.getString(5) ?: "",
                 )
             }
         }
@@ -164,6 +176,18 @@ class EchoStore private constructor(private val dbFile: File) {
             }
         }
         return out
+    }
+
+    /** Persists an edited session goal and re-seals nothing else. */
+    @Synchronized
+    fun updateGoal(sessionId: Long, goal: String) {
+        if (sessionId <= 0) return
+        db.update(
+            TABLE_SESSIONS,
+            ContentValues().apply { put("intent", goal) },
+            "id = ?",
+            arrayOf(sessionId.toString()),
+        )
     }
 
     /** Current on-disk size of the store, for the dashboard storage meter. */
@@ -207,6 +231,8 @@ data class SessionRecord(
     val deviceMeta: String,
     val eventCount: Int,
     val eventTypes: String,
+    /** What the user said they were building; empty if skipped. */
+    val goal: String = "",
 )
 
 /**

@@ -1,6 +1,7 @@
 package com.echo.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -88,6 +89,42 @@ fun SessionChatScreen(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        // The stated goal — the AI judges detections against this. Tappable
+        // to correct it; the digest is rebuilt from the stored value.
+        var editingGoal by remember(state.sessionId) { mutableStateOf(false) }
+        if (editingGoal) {
+            var goalInput by remember { mutableStateOf(state.goal) }
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = goalInput,
+                    onValueChange = { goalInput = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("What were you building?") },
+                )
+                TextButton(onClick = {
+                    viewModel.updateGoal(goalInput)
+                    editingGoal = false
+                }) { Text("Save") }
+            }
+        } else if (state.goal.isNotBlank()) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "Goal: ${state.goal} · tap to edit",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable { editingGoal = true },
+            )
+        } else {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "No goal recorded · tap to add what you were building",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.clickable { editingGoal = true },
+            )
+        }
 
         Spacer(Modifier.height(8.dp))
 

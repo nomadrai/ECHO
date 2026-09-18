@@ -31,6 +31,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,6 +55,8 @@ private val WarningAmber = Color(0xFFFFC857)
 fun PreflightRoute(
     viewModel: PreflightViewModel = viewModel(),
     onContinue: () -> Unit = {},
+    onHistory: () -> Unit = {},
+    onApiSettings: () -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
@@ -74,6 +77,8 @@ fun PreflightRoute(
             )
             runCatching { context.startActivity(intent) }
         },
+        onHistory = onHistory,
+        onApiSettings = onApiSettings,
     )
 }
 
@@ -92,6 +97,8 @@ fun PreflightScreen(
     onContinue: () -> Unit,
     onRequestPermissions: () -> Unit,
     onOpenBatterySettings: () -> Unit,
+    onHistory: () -> Unit = {},
+    onApiSettings: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -146,7 +153,10 @@ fun PreflightScreen(
             OutlinedButton(onClick = onOpenBatterySettings) { Text("Battery settings") }
         }
         Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = onRescan) { Text("Re-run checks") }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = onRescan) { Text("Re-run checks") }
+            OutlinedButton(onClick = onHistory) { Text("Previous sessions") }
+        }
 
         Spacer(Modifier.height(20.dp))
         Button(
@@ -158,6 +168,12 @@ fun PreflightScreen(
         }
 
         Spacer(Modifier.height(28.dp))
+
+        TextButton(onClick = onApiSettings) {
+            Text("AI provider settings (API key) →")
+        }
+
+        Spacer(Modifier.height(16.dp))
 
         Text(
             text = "Next milestone: live camera, microphone and motion capture behind " +

@@ -30,28 +30,44 @@ class MainActivity : ComponentActivity() {
                 // "chat:<sessionId>" | "api"
                 var screen by rememberSaveable { mutableStateOf("preflight") }
 
-                // Survives process death: rememberSaveable restores the string,
+                // The API settings / history screens can be opened from several
+                // places; Back returns to wherever they came from.
+                var returnAfterApi by rememberSaveable { mutableStateOf("preflight") }
+                var historyFromPreflight by rememberSaveable { mutableStateOf(false) }
+                fun openApi() {
+                    returnAfterApi = screen
+                    screen = "api"
+                }
+                fun openHistory(fromPreflight: Boolean) {
+                    historyFromPreflight = fromPreflight
+                    screen = "history"
+                }
+
+                // Survives process death: rememberSaveable restores the strings,
                 // chat session ids ride inside the string itself.
                 when {
                     screen == "preflight" -> PreflightRoute(
                         onContinue = { screen = "dashboard" },
+                        onHistory = { openHistory(fromPreflight = true) },
+                        onApiSettings = { openApi() },
                     )
                     screen == "dashboard" -> DashboardRoute(
                         onBack = { screen = "preflight" },
                         onHistory = { screen = "history" },
-                        onApiSettings = { screen = "api" },
+                        onApiSettings = { openApi() },
                     )
                     screen == "history" -> HistoryScreen(
-                        onBack = { screen = "dashboard" },
+                        onBack = { screen = if (historyFromPreflight) "preflight" else "dashboard" },
+                        backLabel = if (historyFromPreflight) "← Pre-flight" else "← Dashboard",
                         onOpenSession = { id -> screen = "chat:$id" },
                     )
                     screen == "api" -> ApiSettingsScreen(
-                        onBack = { screen = "history" },
+                        onBack = { screen = returnAfterApi },
                     )
                     screen.startsWith("chat:") -> SessionChatScreen(
                         sessionId = screen.removePrefix("chat:").toLongOrNull() ?: 0L,
                         onBack = { screen = "history" },
-                        onOpenApiSettings = { screen = "api" },
+                        onOpenApiSettings = { openApi() },
                     )
                 }
             }
