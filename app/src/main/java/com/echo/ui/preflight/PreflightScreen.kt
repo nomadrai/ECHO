@@ -51,7 +51,10 @@ import com.echo.ui.theme.EchoTheme
 private val WarningAmber = Color(0xFFFFC857)
 
 @Composable
-fun PreflightRoute(viewModel: PreflightViewModel = viewModel()) {
+fun PreflightRoute(
+    viewModel: PreflightViewModel = viewModel(),
+    onContinue: () -> Unit = {},
+) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
 
@@ -62,6 +65,7 @@ fun PreflightRoute(viewModel: PreflightViewModel = viewModel()) {
     PreflightScreen(
         state = state,
         onRescan = viewModel::refresh,
+        onContinue = onContinue,
         onRequestPermissions = { permissionLauncher.launch(runtimePermissions()) },
         onOpenBatterySettings = {
             val intent = Intent(
@@ -85,6 +89,7 @@ private fun runtimePermissions(): Array<String> = buildList {
 fun PreflightScreen(
     state: PreflightState,
     onRescan: () -> Unit,
+    onContinue: () -> Unit,
     onRequestPermissions: () -> Unit,
     onOpenBatterySettings: () -> Unit,
 ) {
@@ -142,6 +147,15 @@ fun PreflightScreen(
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = onRescan) { Text("Re-run checks") }
+
+        Spacer(Modifier.height(20.dp))
+        Button(
+            onClick = onContinue,
+            enabled = state.probed,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Continue to live dashboard →", fontWeight = FontWeight.Bold)
+        }
 
         Spacer(Modifier.height(28.dp))
 
@@ -252,6 +266,7 @@ private fun PreflightScreenPreview() {
         PreflightScreen(
             state = PreflightState(probed = true),
             onRescan = {},
+            onContinue = {},
             onRequestPermissions = {},
             onOpenBatterySettings = {},
         )

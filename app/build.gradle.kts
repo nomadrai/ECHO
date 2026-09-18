@@ -65,8 +65,16 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    // LifecycleService: the capture pipeline lives in a foreground service.
+    implementation(libs.androidx.lifecycle.service)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
+
+    // M0 capture channels: CameraX vision, MediaPipe/YAMNet audio labels.
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.mediapipe.tasks.audio)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)

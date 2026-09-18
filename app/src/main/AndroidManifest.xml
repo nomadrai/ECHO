@@ -25,6 +25,11 @@
          a foreground service that the OS kills mid-session loses the demo. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Required by the LiteRT-LM GPU backend (iQOO demo path, M3+); harmless
+         elsewhere and declared required=false so the M12 never balks. -->
+    <uses-native-library android:name="libvndksupport.so" android:required="false" />
+    <uses-native-library android:name="libOpenCL.so" android:required="false" />
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -44,6 +49,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The real capture pipeline: camera + microphone foreground service. -->
+        <service
+            android:name=".capture.SessionService"
+            android:exported="false"
+            android:foregroundServiceType="camera|microphone" />
     </application>
 
 </manifest>
