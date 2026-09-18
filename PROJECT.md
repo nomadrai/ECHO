@@ -112,7 +112,8 @@ Rules:
 |---|---|
 | Audio event detection (abnormal sounds, impacts, glass, motors) | Audio classification model via **TensorFlow Lite / LiteRT** (e.g., YAMNet-class embeddings + thresholding) |
 | Visual event detection (fast motion, object movement/fall, person presence) | **MediaPipe** / LiteRT tasks (object detection + motion deltas between frames) |
-| Motion events (vibration spikes, shock, device/device-contact) | Native **SensorManager** (accelerometer, gyroscope) + simple peak detection |
+| Motion events (vibration spikes, shock, device/device-contact) | Native **SensorManager** (accelerometer, gyroscope, linear acceleration, gravity/rotation tilt) + simple peak detection |
+| Environment context (magnetic disturbance, pressure transients, light change, occlusion, carried-phone detection) | Native **SensorManager** (magnetometer, barometer, light, proximity, step counter; temperature/humidity when present) — all zero-permission, presence-gated |
 | Local LLM (structuring events, summaries, investigator reasoning) | **LiteRT-LM (Kotlin API)** with Gemma-class models — backend decision researched & verified in §5.2 (MediaPipe LLM Inference API is maintenance-only as of late 2026) |
 | Event correlation & timeline logic | Deterministic Kotlin code (timestamp windows, causality heuristics) — cheap, reliable, debuggable |
 
@@ -176,7 +177,7 @@ Insight(id, sessionId, question, answer, citedEventIds[], usedExternalAI)
 
 ### MVP (must ship — the demo)
 - [ ] START/END session with real foreground-service monitoring (camera, mic, motion)
-- [ ] Real-time event extraction from all three modalities
+- [ ] Real-time event extraction from all modalities (audio, vision, motion, environment)
 - [ ] Multimodal event correlation + temporal timeline with confirmed/unconfirmed states
 - [ ] Event-anchored evidence retention (clips/sensor traces around events)
 - [ ] Live dashboard that reflects and controls the real pipeline

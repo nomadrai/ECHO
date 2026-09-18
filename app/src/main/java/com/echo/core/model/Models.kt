@@ -1,7 +1,7 @@
 package com.echo.core.model
 
 /** Sensing modality of an observation or event. */
-enum class Modality { AUDIO, VISION, MOTION }
+enum class Modality { AUDIO, VISION, MOTION, ENVIRONMENT }
 
 /** Confidence tiers; UNCONFIRMED events are kept, never deleted. */
 enum class EventTier { CONFIRMED, PROBABLE, UNCONFIRMED }

@@ -11,6 +11,7 @@ data class DetectorRates(
     val framesPerSecond: Double = 0.0,
     val audioHopsPerSecond: Double = 0.0,
     val sensorHz: Double = 0.0,
+    val environmentHz: Double = 0.0,
 )
 
 data class DetectorHealth(
@@ -47,7 +48,30 @@ data class VisionLevels(
 data class MotionLevels(
     val accelMagnitude: Double = 0.0,
     val baselineAccel: Double = 0.0,
+    val gyroMagnitude: Double = 0.0,
+    val linearAccelMagnitude: Double = 0.0,
+    val tiltAngleDeg: Double = 0.0,
     val gyroAvailable: Boolean = false,
+    val linearAccelAvailable: Boolean = false,
+    val tiltAvailable: Boolean = false,
+)
+
+data class EnvironmentLevels(
+    val magneticFieldUt: Double = 0.0,
+    val pressureHpa: Double = 0.0,
+    val lightLux: Double = 0.0,
+    val proximityCm: Double = -1.0,
+    val proximityCovered: Boolean = false,
+    val temperatureC: Double = Double.NaN,
+    val humidityPct: Double = Double.NaN,
+    val stepCount: Int = -1,
+    val magnetometerAvailable: Boolean = false,
+    val barometerAvailable: Boolean = false,
+    val lightSensorAvailable: Boolean = false,
+    val proximityAvailable: Boolean = false,
+    val temperatureAvailable: Boolean = false,
+    val humidityAvailable: Boolean = false,
+    val stepCounterAvailable: Boolean = false,
 )
 
 data class SessionBusState(
@@ -59,6 +83,7 @@ data class SessionBusState(
     val audio: AudioLevels = AudioLevels(),
     val vision: VisionLevels = VisionLevels(),
     val motion: MotionLevels = MotionLevels(),
+    val environment: EnvironmentLevels = EnvironmentLevels(),
     val events: List<Event> = emptyList(),
     val eventCount: Int = 0,
 )

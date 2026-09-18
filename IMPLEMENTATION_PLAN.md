@@ -156,9 +156,10 @@ com.echo
 | **Audio class** | MediaPipe `tasks-audio` AudioClassifier + YAMNet (4.13 MB), 975 ms window, **gated**: runs only when the energy gate is open | ≤2/s, ~0 idle | 3–8 % while gated open | YAMNet's 521 generic classes (Thump, Glass, Speech); no "motor failure" class — we infer *change*, not named faults | **Yes** |
 | **Vision motion** | CameraX `ImageAnalysis`, 640×480 @8 fps, `KEEP_ONLY_LATEST`; luma → 160×120, frame-diff vs rolling background → changed-pixel % + motion centroid + brightness | 8 fps | 3–6 % | Rain/auto-exposure/flicker cause false motion; sensitivity must be exposed in the UI | **Yes** |
 | **Vision objects** | EfficientDet-Lite0 (7.25 MB) on 1–2 fps keyframes → presence labels | 1–2 fps | 5–10 % during inference | Weak on small/odd objects; adds labels, not causes | Stretch |
-| **Device motion** | `SensorManager` accelerometer (+gyro) @ ~50 Hz: |a| peak detection vs EMA baseline, variance windows, orientation change | 50 Hz | **The phone is the sensor** — it measures *device* motion, not the rig's. Fix: mechanically couple the phone to the rig/table (§10) | **Yes** |
+| **Device motion** | `SensorManager` accelerometer + gyroscope + linear acceleration @ ~50 Hz, gravity/rotation-vector tilt (see `perception/TiltTracker.kt`): \|a\|/\|ω\| peak detection vs EMA baselines, deadband tilt tracking | 50 Hz | **The phone is the sensor** — it measures *device* motion, not the rig's. Fix: mechanically couple the phone to the rig/table (§10) | **Yes** |
+| **Environment context** | `SensorManager` magnetometer, barometer, light, proximity, step counter (+ temperature/humidity when present) @ ~5 Hz, per-channel relative-σ baselines; transient-only extraction | ≤5 Hz/ch | **Context, not causes**: magnetic = ferrous parts/actuators moving nearby; pressure = doors/HVAC/drops outside the camera's view; light = corroborates vision; proximity/step = witness integrity (covered / carried phone). Absent sensors degrade to bus flags | **Yes** |
 
-Explicitly **not** doing: continuous video recording, per-frame scene description, or audio-to-text.
+Explicitly **not** doing: continuous video recording, per-frame scene description, audio-to-text, GPS/location, or Wi-Fi/BT scanning (see README sensor matrix for the exclusion rationale).
 
 ---
 
@@ -186,7 +187,7 @@ Session(id, startedAtMs, endedAtMs?, status: RECORDING | INTERRUPTED | SEALED,
         deviceMeta(json), digestJson, summaryMd, baselineJson, evidenceBytes, eventCount)
 ```
 
-**Event taxonomy (MVP):** `IMPACT_TRANSIENT`, `SUSTAINED_NOISE_START/STOP`, `TONE_CHANGE`, `SPEECH_PRESENT`, `RAPID_MOTION`, `MOTION_START/STOP`, `BRIGHTNESS_CHANGE`, `SCENE_CHANGE`, `DEVICE_SHOCK`, `VIBRATION_BURST`, `ORIENTATION_CHANGE`, plus fused `INCIDENT` and `PRE_INCIDENT_DEVIATION`.
+**Event taxonomy (MVP):** `IMPACT_TRANSIENT`, `SUSTAINED_NOISE_START/STOP`, `TONE_CHANGE`, `SPEECH_PRESENT`, `RAPID_MOTION`, `MOTION_START/STOP`, `BRIGHTNESS_CHANGE`, `SCENE_CHANGE`, `DEVICE_SHOCK`, `VIBRATION_BURST`, `ORIENTATION_CHANGE`, plus the expanded-sensor types — `ACCEL_JOLT` (linear acceleration), `ANGULAR_JOLT` (gyroscope), `TILT_CHANGE` (gravity/rotation tilt), `MAGNETIC_DISTURBANCE` (magnetometer), `PRESSURE_TRANSIENT` (barometer), `LIGHT_CHANGE` (ambient light), `PROXIMITY_OCCLUSION`, `STEP_DETECTED`, `AMBIENT_TEMP`/`HUMIDITY` (presence-gated) — and fused `INCIDENT` / `PRE_INCIDENT_DEVIATION` (CorrelationEngine, M1). Full per-sensor mapping in the README sensor matrix.
 
 **Correlation rules (deterministic, tunable, unit-tested):**
 - A/V ±250 ms · audio↔motion ±400 ms · vision↔motion ±500 ms · sustained pairs = interval overlap.
@@ -295,7 +296,7 @@ Not required for the demo — **the offline path is the demo path.**
 ## 12. MVP vs. optional
 
 **MVP (demo-critical — if only half of this ships, the demo still wins):**
-1. FGS monitoring of all three modalities on a shared clock
+1. FGS monitoring of all modalities (audio, vision, motion, environment) on a shared clock
 2. Detectors: audio RMS/bands + gated YAMNet, frame-diff motion, accel peaks/variance
 3. Baseline learning + deviation scoring
 4. Event extraction + correlation + tiers + relations → timeline DB
@@ -383,23 +384,22 @@ Build verification order from here:
 
 ---
 
-## 16. Implementation order & effort estimate
+## 16. Implementation order & schedule
 
-Focused hours (not calendar). **★ = demo-critical path.**
+Calendar plan, not hour counts. **★ = demo-critical path.** Build window: **Fri Sept 18 → Fri Sept 25, 2026 (one week)**.
 
-| # | Work | Deliverable | Est. |
-|---|---|---|---|
-| ★0a | **Toolchain** (done) — SDK, Gradle, wrapper, scaffold | Version-locked project | ✅ |
-| ★0b | **JDK fix + first green build + install on M12** | Debug APK running, pre-flight screen showing real hardware | 1 h |
-| ★0c | **M0 — capture spike**: FGS + CameraX + `AudioRecord` + `SensorManager` streaming to on-screen live counters; YAMNet + frame-diff smoke test; LiteRT-LM load + latency measurement on the actual phone | Numbers on screen (frames/s, audio hops/s, sensor Hz) + measured model perf | 8 h |
-| ★1 | **M1 — Pipeline**: `core/model`, SessionClock, detectors, BaselineTracker, EventExtractor, CorrelationEngine, SQLite layer, repositories; JVM unit tests for correlation tiers | Events accumulating in the DB from a real session | 10 h |
-| ★2 | **M2 — Evidence + lifecycle**: ring buffers, EvidenceRetainer, PREPARING pre-flight, FINALIZING seal, dashboard (rates/feed/timeline/storage), START/END | Real session → timeline + evidence on disk | 10 h |
-| ★3 | **M3 — AI**: DigestBuilder, SessionRetriever, LocalLlmEngine (GPU+MTP, background preload), system-prompt contract, AnswerValidator, summary streaming, investigator chat UI | Unscripted question answered with citations | 11 h |
-| ★4 | **M4 — Report & polish**: PDF/Markdown report, evidence bundle share, session history, delete-session/privacy screen, sensitivity tuning UI, threshold tuning on site, rehearsal | Shareable incident report | 8 h |
-| 5 | Stretch A: H.264 evidence clips | Real video playback | 6–8 h |
-| 6 | Stretch B: EfficientDet labels · NPU experiment · FunctionGemma tools · external fallback wiring | Depth/novelty extras | 4 h each |
+| Day | Work | Deliverable |
+|---|---|---|
+| Fri Sept 18 | ★0a Toolchain (done) — SDK, Gradle, wrapper, scaffold · ★0b JDK fix + first green build · **sensor expansion** (gyro, linear-accel, gravity/rotation tilt, magnetometer, barometer, proximity, light, step, temp/humidity) wired into the observation → extraction pipeline | Version-locked project; debug APK; every planned sensor streaming as observations with named event types |
+| Sat Sept 19 | ★0c M0 capture spike on the M12: FGS + CameraX + `AudioRecord` + `SensorManager` live counters; YAMNet + frame-diff smoke test; LiteRT-LM load + latency measured on the device | Numbers on screen (frames/s, audio hops/s, sensor Hz per channel) + measured model perf |
+| Sun Sept 20 | ★1 M1 Pipeline: `core/model`, SessionClock, detectors, BaselineTracker, EventExtractor, CorrelationEngine, SQLite layer, repositories; JVM unit tests for correlation tiers | Events accumulating in the DB from a real session |
+| Mon Sept 21 | ★2 M2 Evidence + lifecycle: ring buffers, EvidenceRetainer, PREPARING pre-flight, FINALIZING seal, dashboard (rates/feed/timeline/storage), START/END | Real session → timeline + evidence on disk |
+| Tue Sept 22 | ★3 M3 AI: DigestBuilder, SessionRetriever, LocalLlmEngine (GPU+MTP, background preload), system-prompt contract, AnswerValidator, summary streaming, investigator chat UI | Unscripted question answered with citations |
+| Wed Sept 23 | ★4 M4 Report & polish: PDF/Markdown report, evidence bundle share, session history, delete-session/privacy screen, sensitivity tuning UI, threshold tuning on site, rehearsal | Shareable incident report |
+| Thu Sept 24 | Stretch A: H.264 evidence clips · Stretch B: EfficientDet labels · NPU experiment · FunctionGemma tools · external fallback wiring — **in that order, stop when the buffer starts** | Depth/novelty extras |
+| Fri Sept 25 | Buffer: rehearse the demo on the actual device, freeze thresholds, ship | Demo-ready build |
 
-**Demo-critical path ≈ 39 h focused; full MVP ≈ 47 h; with stretch ≈ 60 h.** With the available week-plus, the goal is MVP plus Stretch A and at least one of Stretch B.
+**The schedule spends Mon–Wed on the demo-critical MVP and protects Thu–Fri as stretch + buffer.** If a day slips, drop Stretch work first — never the ★ path.
 
 ---
 

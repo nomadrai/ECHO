@@ -40,6 +40,8 @@ class CapabilityProbe(private val context: Context) {
         microphone(),
         accelerometer(),
         gyroscope(),
+        tiltSensor(),
+        environmentSensors(),
         requiredPermissions(),
         notificationPermission(),
         storage(),
@@ -120,6 +122,62 @@ class CapabilityProbe(private val context: Context) {
                 "Gyroscope",
                 CheckStatus.WARN,
                 "Not present — orientation-change detection disabled, everything else runs",
+            )
+        }
+    }
+
+    private fun tiltSensor(): CapabilityCheck {
+        val sm = sensorManager()
+        // Gravity is preferred for tilt; the rotation vector is the fallback
+        // on gyro-less devices (the Galaxy M12).
+        val sensor = sm?.getDefaultSensor(Sensor.TYPE_GRAVITY)
+            ?: sm?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        return if (sensor != null) {
+            CapabilityCheck(
+                "tilt",
+                "Tilt sensing",
+                CheckStatus.PASS,
+                "${sensor.name} — knocked-over/moved detection armed",
+            )
+        } else {
+            CapabilityCheck(
+                "tilt",
+                "Tilt sensing",
+                CheckStatus.WARN,
+                "No gravity or rotation-vector sensor — TILT_CHANGE disabled",
+            )
+        }
+    }
+
+    /** One aggregate line for the zero-permission environment sensor set. */
+    private fun environmentSensors(): CapabilityCheck {
+        val sm = sensorManager()
+        val names = listOf(
+            Sensor.TYPE_MAGNETIC_FIELD to "magnetometer",
+            Sensor.TYPE_PRESSURE to "barometer",
+            Sensor.TYPE_LIGHT to "light",
+            Sensor.TYPE_PROXIMITY to "proximity",
+            Sensor.TYPE_STEP_COUNTER to "step counter",
+            Sensor.TYPE_AMBIENT_TEMPERATURE to "thermometer",
+            Sensor.TYPE_RELATIVE_HUMIDITY to "hygrometer",
+        ).filter { sm?.getDefaultSensor(it.first) != null }
+            .map { it.second }
+        return if (names.isEmpty()) {
+            CapabilityCheck(
+                "environment",
+                "Environment sensors",
+                CheckStatus.WARN,
+                "None present — environment channel will be empty",
+            )
+        } else {
+            CapabilityCheck(
+                "environment",
+                "Environment sensors",
+                CheckStatus.PASS,
+                names.joinToString(
+                    " · ",
+                    prefix = "${names.size} present: ",
+                ) + " — magnetic/pressure/light/occlusion context armed",
             )
         }
     }

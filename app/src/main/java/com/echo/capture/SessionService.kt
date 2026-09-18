@@ -46,6 +46,7 @@ class SessionService : LifecycleService() {
     private var cameraSource: CameraSource? = null
     private var audioSource: AudioSource? = null
     private var sensorSource: SensorSource? = null
+    private var environmentSource: EnvironmentSource? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
@@ -137,7 +138,11 @@ class SessionService : LifecycleService() {
                 phase = SessionPhase.RECORDING,
                 startedAtEpochMs = System.currentTimeMillis(),
                 sessionMs = 0,
-                motion = it.motion.copy(gyroAvailable = false),
+                motion = it.motion.copy(
+                    gyroAvailable = false,
+                    linearAccelAvailable = false,
+                    tiltAvailable = false,
+                ),
             )
         }
 
@@ -162,6 +167,12 @@ class SessionService : LifecycleService() {
             }
         }
         sensorSource = SensorSource(sessionClock, sessionBus, pipeline).also { it.start(this) }
+        // Environment sensors (magnetometer, barometer, light, proximity,
+        // step counter, temperature/humidity when present): zero permissions,
+        // presence-gated per sensor, all feeding the same pipeline.
+        environmentSource = EnvironmentSource(sessionClock, sessionBus, pipeline).also {
+            it.start(this)
+        }
 
         Log.i(TAG, "session started (tier=${profile.tier}, llm=${profile.llm.name})")
     }
@@ -176,9 +187,11 @@ class SessionService : LifecycleService() {
         cameraSource?.stop()
         audioSource?.stop()
         sensorSource?.stop()
+        environmentSource?.stop()
         cameraSource = null
         audioSource = null
         sensorSource = null
+        environmentSource = null
 
         wakeLock?.takeIf { it.isHeld }?.release()
         wakeLock = null

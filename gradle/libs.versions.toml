@@ -6,11 +6,13 @@
 agp = "8.13.2"
 kotlin = "2.4.20"
 
-# AndroidX
-coreKtx = "1.19.0"
+# AndroidX — pinned to the newest versions compatible with AGP 8.13.2 /
+# compileSdk 36. core-ktx 1.19.0+ and Compose 1.12+ demand AGP 9.1 +
+# compileSdk 37, which this build deliberately does not target yet.
+coreKtx = "1.17.0"
 activityCompose = "1.13.0"
-lifecycle = "2.11.0"
-composeBom = "2026.09.00"
+lifecycle = "2.10.0"
+composeBom = "2026.04.01"
 camerax = "1.6.2"
 
 # Kotlin ecosystem

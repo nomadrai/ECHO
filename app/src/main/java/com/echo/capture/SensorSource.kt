@@ -9,13 +9,27 @@ import android.util.Log
 import com.echo.core.model.Modality
 import com.echo.core.model.Observation
 import com.echo.perception.BaselineTracker
+import com.echo.perception.TiltTracker
 import kotlin.math.sqrt
 
 /**
- * Motion channel: accelerometer at ~50 Hz (SENSOR_DELAY_GAME). The phone *is*
- * the sensor — it measures device motion, which is why the demo mounts the
- * phone on the rig. No gyroscope (Galaxy M12) degrades to accel-only and the
- * dashboard says so. Zero dependencies, deterministic peak/variance logic.
+ * Motion channel — the phone *is* the sensor, which is why the demo mounts it
+ * on the rig. Streams four `SensorManager` channels on one listener:
+ *
+ *  - `TYPE_ACCELEROMETER` (~50 Hz): |a| magnitude → DEVICE_SHOCK /
+ *    VIBRATION_BURST. Includes gravity, so a shock and a re-orientation look
+ *    similar here — the tilt channel below disambiguates.
+ *  - `TYPE_GYROSCOPE` (if present): |ω| → ANGULAR_JOLT. A table bump or a
+ *    knocked-over rig rotates the phone faster than resting noise ever does.
+ *    Absent on the Galaxy M12 — degrades to accel-only, the dashboard says so.
+ *  - `TYPE_LINEAR_ACCELERATION` (if present): gravity-free |a| → ACCEL_JOLT.
+ *    A cleaner shock number than raw |a|; also the channel that separates
+ *    "phone was re-oriented" from "phone was hit".
+ *  - `TYPE_GRAVITY` (or `TYPE_ROTATION_VECTOR` fallback): static tilt →
+ *    TILT_CHANGE when the phone/rig is knocked over or the mount slips.
+ *
+ * All DSP is deterministic and the zero-permission sensor set. No gyroscope
+ * (M12) degrades gracefully; the dashboard reports which channels are live.
  */
 class SensorSource(
     private val clock: MonotonicClock,
@@ -25,7 +39,14 @@ class SensorSource(
 
     private var manager: SensorManager? = null
     private var gyroAvailable = false
-    private val baseline = BaselineTracker(minSamples = 300, sigmaFloor = 0.2)
+    private var linearAccelAvailable = false
+    private var tiltAvailable = false
+
+    private val accelBaseline = BaselineTracker(minSamples = 300, sigmaFloor = 0.2)
+    private val gyroBaseline = BaselineTracker(minSamples = 300, sigmaFloor = 0.02)
+    private val linearBaseline = BaselineTracker(minSamples = 300, sigmaFloor = 0.1)
+    private val tiltTracker = TiltTracker(deadbandDeg = 3.0)
+
     private var lastRatePublishMs = 0L
     private val rateMeter = com.echo.core.metrics.RateMeter()
 
@@ -42,28 +63,57 @@ class SensorSource(
             return
         }
         gyroAvailable = sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null
+        linearAccelAvailable = sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION) != null
+        // Tilt from the gravity sensor; on gyro-less devices the rotation
+        // vector is the fused alternative that still gives a gravity vector.
+        val gravitySensor = sm.getDefaultSensor(Sensor.TYPE_GRAVITY)
+            ?: sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        tiltAvailable = gravitySensor != null
+
         bus.update {
             it.copy(
-                motion = it.motion.copy(gyroAvailable = gyroAvailable),
+                motion = it.motion.copy(
+                    gyroAvailable = gyroAvailable,
+                    linearAccelAvailable = linearAccelAvailable,
+                    tiltAvailable = tiltAvailable,
+                ),
                 health = it.health.copy(sensorRunning = true),
             )
         }
+
         val registered = sm.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
+        if (gyroAvailable) {
+            sm.registerListener(this, sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE), SensorManager.SENSOR_DELAY_GAME)
+        }
+        if (linearAccelAvailable) {
+            sm.registerListener(this, sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION), SensorManager.SENSOR_DELAY_GAME)
+        }
+        if (tiltAvailable) {
+            sm.registerListener(this, gravitySensor, SensorManager.SENSOR_DELAY_UI)
+        }
         if (!registered) {
             fail("registerListener returned false")
         }
     }
 
     override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type != Sensor.TYPE_ACCELEROMETER) return
+        when (event.sensor.type) {
+            Sensor.TYPE_ACCELEROMETER -> onAccel(event)
+            Sensor.TYPE_GYROSCOPE -> onGyro(event)
+            Sensor.TYPE_LINEAR_ACCELERATION -> onLinearAccel(event)
+            Sensor.TYPE_GRAVITY, Sensor.TYPE_ROTATION_VECTOR -> onTiltReference(event)
+        }
+    }
+
+    private fun onAccel(event: SensorEvent) {
         val tMs = clock.elapsedMs()
-        val x = event.values[0]
-        val y = event.values[1]
-        val z = event.values[2]
+        val x = event.values[0].toDouble()
+        val y = event.values[1].toDouble()
+        val z = event.values[2].toDouble()
         val magnitude = sqrt(x * x + y * y + z * z)
 
-        baseline.update(magnitude)
-        val sigma = if (baseline.ready) baseline.deviationSigma(magnitude) else null
+        accelBaseline.update(magnitude)
+        val sigma = if (accelBaseline.ready) accelBaseline.deviationSigma(magnitude) else null
         rateMeter.tick(tMs)
 
         pipeline.submit(
@@ -73,16 +123,103 @@ class SensorSource(
                 kind = "ACCEL_MAG",
                 value = magnitude,
                 unit = "m/s²",
-                baselineValue = baseline.baselineMean,
+                baselineValue = accelBaseline.baselineMean,
                 deviationSigma = sigma,
             ),
             sigma,
         )
+        publishRate(tMs)
+    }
+
+    private fun onGyro(event: SensorEvent) {
+        val tMs = clock.elapsedMs()
+        val x = event.values[0].toDouble()
+        val y = event.values[1].toDouble()
+        val z = event.values[2].toDouble()
+        val magnitude = sqrt(x * x + y * y + z * z)
+        gyroBaseline.update(magnitude)
+        val sigma = if (gyroBaseline.ready) gyroBaseline.deviationSigma(magnitude) else null
+        bus.update { it.copy(motion = it.motion.copy(gyroMagnitude = magnitude)) }
+        pipeline.submit(
+            Observation(
+                tMs = tMs,
+                modality = Modality.MOTION,
+                kind = "GYRO_MAG",
+                value = magnitude,
+                unit = "rad/s",
+                baselineValue = gyroBaseline.baselineMean,
+                deviationSigma = sigma,
+            ),
+            sigma,
+        )
+    }
+
+    private fun onLinearAccel(event: SensorEvent) {
+        val tMs = clock.elapsedMs()
+        val x = event.values[0].toDouble()
+        val y = event.values[1].toDouble()
+        val z = event.values[2].toDouble()
+        val magnitude = sqrt(x * x + y * y + z * z)
+        linearBaseline.update(magnitude)
+        val sigma = if (linearBaseline.ready) linearBaseline.deviationSigma(magnitude) else null
+        bus.update { it.copy(motion = it.motion.copy(linearAccelMagnitude = magnitude)) }
+        pipeline.submit(
+            Observation(
+                tMs = tMs,
+                modality = Modality.MOTION,
+                kind = "ACCEL_LIN",
+                value = magnitude,
+                unit = "m/s²",
+                baselineValue = linearBaseline.baselineMean,
+                deviationSigma = sigma,
+            ),
+            sigma,
+        )
+    }
+
+    /** Gravity / rotation-vector events feed the tilt reference. */
+    private fun onTiltReference(event: SensorEvent) {
+        val x = event.values[0].toDouble()
+        val y = event.values[1].toDouble()
+        val z = event.values[2].toDouble()
+        val tMs = clock.elapsedMs()
+
+        val angle: Double
+        if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
+            // Quaternion vector part + scalar: Android orders values [x, y, z, w].
+            val w = event.values[3].toDouble()
+            tiltTracker.updateQuaternion(x, y, z, w)
+            angle = tiltTracker.angleFromQuaternionReference(x, y, z, w)
+        } else {
+            tiltTracker.updateGravity(x, y, z)
+            angle = tiltTracker.angleFromGravityReference(x, y, z)
+        }
+        bus.update {
+            it.copy(motion = it.motion.copy(tiltAngleDeg = angle))
+        }
+        if (angle > 0.0) {
+            // Transient-scored only (see EventExtractor.transientOnlyKinds).
+            pipeline.submit(
+                Observation(
+                    tMs = tMs,
+                    modality = Modality.MOTION,
+                    kind = "TILT_ANGLE",
+                    value = angle,
+                    unit = "deg",
+                    baselineValue = 0.0,
+                    deviationSigma = angle / 3.0, // 1σ per 3° beyond the deadband
+                ),
+                angle / 3.0,
+            )
+        }
+    }
+
+    private fun publishRate(tMs: Long) {
         bus.update {
             it.copy(
                 motion = it.motion.copy(
-                    accelMagnitude = magnitude,
-                    baselineAccel = baseline.baselineMean,
+                    accelMagnitude = accelBaseline.lastValue,
+                    baselineAccel = accelBaseline.baselineMean,
                 ),
             )
         }

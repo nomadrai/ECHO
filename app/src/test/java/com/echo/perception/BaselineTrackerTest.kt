@@ -44,4 +44,21 @@ class BaselineTrackerTest {
         // max(0, 100 × 0.02) = 2.0
         assertEquals(2.0, tracker.baselineSigma, 1e-9)
     }
+
+    @Test
+    fun `relative sigma floor covers large-magnitude channels`() {
+        // A barometer resting at ~101 kPa: the absolute floor is irrelevant,
+        // the relative one must dominate.
+        val tracker = BaselineTracker(minSamples = 10, sigmaFloor = 1.0, relativeSigmaFloor = 0.0002)
+        repeat(100) { tracker.update(101_325.0) }
+        assertEquals(101_325.0 * 0.0002, tracker.baselineSigma, 1e-6)
+    }
+
+    @Test
+    fun `relative floor never shrinks the absolute floor`() {
+        val tracker = BaselineTracker(minSamples = 10, sigmaFloor = 5.0, relativeSigmaFloor = 0.001)
+        repeat(100) { tracker.update(10.0) }
+        // max(5.0, 10 × 0.001) = 5.0
+        assertEquals(5.0, tracker.baselineSigma, 1e-9)
+    }
 }

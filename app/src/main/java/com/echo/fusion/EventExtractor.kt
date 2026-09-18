@@ -23,16 +23,21 @@ class EventExtractor(
     private val sustainedSigma: Double = 2.5,
     private val sustainedMs: Long = 800,
     private val dedupMs: Long = 300,
+    /**
+     * Observations of these kinds are scored for transients only. The
+     * environment channel's EMA baselines move with slow drifts (weather for
+     * the barometer, lights warming up for the light sensor), so a "sustained
+     * elevation" there would fire long after the incident it describes.
+     */
+    private val transientOnlyKinds: Set<String> = DEFAULT_TRANSIENT_ONLY,
 ) {
     private var nextId = 1L
     private val lastTransientAt = HashMap<String, Long>()
     private val sustainedSince = HashMap<String, Long>()
     private val lastSustainedEmitAt = HashMap<String, Long>()
 
-    /**
-     * Feed one scored observation. [deviationSigma] == null (baseline not yet
-     * learned) never produces events.
-     */
+    /** Feed one scored observation. [deviationSigma] == null (baseline not yet
+     * learned) never produces events. */
     @Synchronized
     fun onObservation(observation: Observation, deviationSigma: Double?): List<Event> {
         val sigma = deviationSigma ?: return emptyList()
@@ -40,8 +45,11 @@ class EventExtractor(
         val out = ArrayList<Event>(1)
 
         if (sigma >= triggerSigma) {
-            val last = lastTransientAt[kind] ?: Long.MIN_VALUE
-            if (observation.tMs - last >= dedupMs) {
+            // Null-safe dedup: a Long.MIN_VALUE sentinel would overflow
+            // (tMs - MIN_VALUE wraps negative) and silently suppress the
+            // first — and then every — transient of the kind.
+            val passesDedup = lastTransientAt[kind]?.let { observation.tMs - it >= dedupMs } ?: true
+            if (passesDedup) {
                 lastTransientAt[kind] = observation.tMs
                 out += Event(
                     id = nextId++,
@@ -59,12 +67,10 @@ class EventExtractor(
             }
         }
 
-        if (sigma >= sustainedSigma) {
+        if (sigma >= sustainedSigma && kind !in transientOnlyKinds) {
             val start = sustainedSince.getOrPut(kind) { observation.tMs }
-            val lastEmit = lastSustainedEmitAt[kind] ?: Long.MIN_VALUE
-            if (observation.tMs - start >= sustainedMs &&
-                observation.tMs - lastEmit >= sustainedMs
-            ) {
+            val emitOk = lastSustainedEmitAt[kind]?.let { observation.tMs - it >= sustainedMs } ?: true
+            if (observation.tMs - start >= sustainedMs && emitOk) {
                 lastSustainedEmitAt[kind] = observation.tMs
                 out += Event(
                     id = nextId++,
@@ -89,7 +95,13 @@ class EventExtractor(
     private fun transientType(kind: String) = when (kind) {
         "AUDIO_RMS" -> "IMPACT_TRANSIENT"
         "ACCEL_MAG" -> "DEVICE_SHOCK"
+        "ACCEL_LIN" -> "ACCEL_JOLT"
+        "GYRO_MAG" -> "ANGULAR_JOLT"
         "FRAME_MOTION" -> "RAPID_MOTION"
+        "TILT_ANGLE" -> "TILT_CHANGE"
+        "MAG_FIELD" -> "MAGNETIC_DISTURBANCE"
+        "PRESSURE" -> "PRESSURE_TRANSIENT"
+        "LIGHT_LUX" -> "LIGHT_CHANGE"
         else -> kind
     }
 
@@ -105,4 +117,16 @@ class EventExtractor(
     private fun salienceFor(sigma: Double) = (sigma / 10.0).coerceIn(0.1, 1.0)
 
     private fun fmt(v: Double) = String.format(Locale.US, "%.3f", v)
+
+    companion object {
+        /**
+         * Environment-channel kinds (barometer, light, magnetometer) plus the
+         * tilt/step/occlusion events the environment source emits directly:
+         * all transient-scored, never sustained.
+         */
+        val DEFAULT_TRANSIENT_ONLY = setOf(
+            "PRESSURE", "LIGHT_LUX", "MAG_FIELD", "TILT_ANGLE",
+            "STEP_DETECTED", "PROXIMITY_OCCLUSION",
+        )
+    }
 }

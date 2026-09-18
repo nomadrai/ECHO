@@ -69,10 +69,11 @@ class EventExtractorTest {
         val e = EventExtractor(sustainedSigma = 2.5, sustainedMs = 800, triggerSigma = 4.0)
         // Warm the baseline far from the elevated level.
         repeat(400) { e.onObservation(obs("AUDIO_RMS", it * 20L), 0.0) }
-        var fired = emptyList<com.echo.core.model.Event>()
-        // 40 hops × 20 ms = 800 ms of sustained elevation.
+        // 60 hops × 20 ms = 1.2 s of sustained elevation; the event fires once,
+        // partway through the window, so accumulate across the whole run.
+        val fired = ArrayList<com.echo.core.model.Event>()
         for (hop in 0 until 60) {
-            fired = e.onObservation(obs("AUDIO_RMS", 9_000L + hop * 20), 3.0)
+            fired += e.onObservation(obs("AUDIO_RMS", 9_000L + hop * 20), 3.0)
         }
         assertEquals(1, fired.size)
         assertEquals("SUSTAINED_NOISE", fired[0].type)

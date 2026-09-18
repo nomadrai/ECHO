@@ -8,8 +8,13 @@ import kotlin.math.sqrt
  */
 object AudioDsp {
 
-    /** One-pole low-pass coefficient; ~4 kHz corner at a 16 kHz sample rate. */
-    private const val LP_ALPHA = 0.5
+    /**
+     * One-pole low-pass coefficient. 0.25 puts the corner near 1.3 kHz at a
+     * 16 kHz rate (α = 1 − e^(−2π·f/fs) ≈ 0.25 for f ≈ 1.3 kHz) — low enough
+     * that a 5 kHz tone lands almost entirely in the high band, which is the
+     * whole point of the rumble/hiss split.
+     */
+    private const val LP_ALPHA = 0.25
 
     /** Root-mean-square level in [0, 1]. */
     fun rms(samples: ShortArray, len: Int): Double {

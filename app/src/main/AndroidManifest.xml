@@ -27,8 +27,6 @@
 
     <!-- Required by the LiteRT-LM GPU backend (iQOO demo path, M3+); harmless
          elsewhere and declared required=false so the M12 never balks. -->
-    <uses-native-library android:name="libvndksupport.so" android:required="false" />
-    <uses-native-library android:name="libOpenCL.so" android:required="false" />
 
     <application
         android:allowBackup="false"
@@ -49,6 +47,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Required by the LiteRT-LM GPU backend (iQOO demo path, M3+);
+             required=false so devices without OpenCL never balk. -->
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
 
         <!-- The real capture pipeline: camera + microphone foreground service. -->
         <service

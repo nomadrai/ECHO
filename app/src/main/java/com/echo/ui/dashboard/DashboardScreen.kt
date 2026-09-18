@@ -170,6 +170,8 @@ fun DashboardScreen(
         VisionCard(state)
         Spacer(Modifier.height(12.dp))
         MotionCard(state)
+        Spacer(Modifier.height(12.dp))
+        EnvironmentCard(state)
 
         Spacer(Modifier.height(16.dp))
 
@@ -217,7 +219,8 @@ private fun RatesCard(state: SessionBusState) {
             Spacer(Modifier.height(6.dp))
             KeyValue("Camera frames/s", fmt(state.rates.framesPerSecond, 1))
             KeyValue("Audio hops/s", fmt(state.rates.audioHopsPerSecond, 1))
-            KeyValue("Sensor Hz", fmt(state.rates.sensorHz, 1))
+            KeyValue("Motion Hz", fmt(state.rates.sensorHz, 1))
+            KeyValue("Environment Hz", fmt(state.rates.environmentHz, 1))
         }
     }
 }
@@ -254,7 +257,7 @@ private fun AudioCard(state: SessionBusState) {
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     labels.take(3).forEach { (label, score) ->
                         Text(
-                            text = "$label ${fmt(score * 100, 0)}%",
+                            text =                            "$label ${fmt(score * 100.0, 0)}%",
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier
@@ -308,7 +311,47 @@ private fun MotionCard(state: SessionBusState) {
             Spacer(Modifier.height(6.dp))
             KeyValue("|a| magnitude", fmt(state.motion.accelMagnitude, 2))
             KeyValue("Baseline |a|", fmt(state.motion.baselineAccel, 2))
-            KeyValue("Gyroscope", if (state.motion.gyroAvailable) "present" else "absent (accel-only)")
+            KeyValue("|ω| angular", if (state.motion.gyroAvailable) fmt(state.motion.gyroMagnitude, 2) + " rad/s" else "no gyroscope")
+            KeyValue("Linear |a|", if (state.motion.linearAccelAvailable) fmt(state.motion.linearAccelMagnitude, 2) + " m/s²" else "not available")
+            KeyValue("Tilt offset", if (state.motion.tiltAvailable) fmt(state.motion.tiltAngleDeg, 1) + "°" else "not available")
+        }
+    }
+}
+
+@Composable
+private fun EnvironmentCard(state: SessionBusState) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(running = true, error = null)
+                Spacer(Modifier.width(8.dp))
+                SectionLabel("ENVIRONMENT")
+            }
+            Spacer(Modifier.height(6.dp))
+            val env = state.environment
+            if (!env.magnetometerAvailable && !env.barometerAvailable &&
+                !env.lightSensorAvailable && !env.proximityAvailable &&
+                !env.stepCounterAvailable && !env.temperatureAvailable && !env.humidityAvailable
+            ) {
+                Text(
+                    text = "No environment sensors present on this device",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                if (env.magnetometerAvailable) KeyValue("|B| magnetic", fmt(env.magneticFieldUt, 1) + " µT")
+                if (env.barometerAvailable) KeyValue("Pressure", fmt(env.pressureHpa, 2) + " hPa")
+                if (env.lightSensorAvailable) KeyValue("Ambient light", fmt(env.lightLux, 1) + " lx")
+                if (env.proximityAvailable) {
+                    KeyValue(
+                        "Proximity",
+                        if (env.proximityCovered) "COVERED" else fmt(env.proximityCm, 1) + " cm",
+                    )
+                }
+                if (env.stepCounterAvailable && env.stepCount >= 0) KeyValue("Steps", env.stepCount.toString())
+                if (env.temperatureAvailable) KeyValue("Ambient temp", fmt(env.temperatureC, 1) + " °C")
+                if (env.humidityAvailable) KeyValue("Humidity", fmt(env.humidityPct, 1) + " %")
+            }
         }
     }
 }

@@ -11,8 +11,10 @@ class RateMeterTest {
         val meter = RateMeter(windowMs = 1_000)
         repeat(5) { meter.tick(it * 100L) }
         assertEquals(5, meter.count())
-        // The tick from t=0 has fallen out of the window by t=1_200.
-        assertEquals(4, meter.count())
+        // Trim is strict: by t=1_100 the t=0 tick (>1000 ms old) has fallen
+        // out of the window; by t=1_200 the t=0 and t=100 ticks both have.
+        assertEquals(4, meter.count(1_100L))
+        assertEquals(3, meter.count(1_200L))
     }
 
     @Test
