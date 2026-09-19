@@ -23,10 +23,26 @@ data class Observation(
 )
 
 /**
+ * Relation between two events, always labelled co-occurrence — never causality
+ * (plan §7: no causal claim is ever stored as fact).
+ */
+enum class RelationKind { PRECEDES, CO_OCCURS, SUSTAINED_WITH }
+
+/** A relation edge between two events, with the window it was judged in. */
+data class EventRelation(
+    val fromEventId: Long,
+    val toEventId: Long,
+    val kind: RelationKind,
+    val deltaMs: Long,
+    val windowMs: Long,
+    val confidence: Double,
+)
+
+/**
  * A typed, timestamped, confidence-tiered occurrence.
  *
  * No causal claim is ever stored as fact — cross-modal relations
- * (PRECEDES / CO_OCCURS) are added by the correlation engine in M1.
+ * (PRECEDES / CO_OCCURS) are added by the correlation engine.
  */
 data class Event(
     val id: Long,

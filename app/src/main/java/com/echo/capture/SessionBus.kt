@@ -1,6 +1,7 @@
 package com.echo.capture
 
 import com.echo.core.model.Event
+import com.echo.core.model.EventRelation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -86,6 +87,8 @@ data class SessionBusState(
     val environment: EnvironmentLevels = EnvironmentLevels(),
     val events: List<Event> = emptyList(),
     val eventCount: Int = 0,
+    val relations: List<EventRelation> = emptyList(),
+    val incidentCount: Int = 0,
 )
 
 /**
@@ -107,7 +110,13 @@ class SessionBus {
         it.copy(
             events = (it.events + event).takeLast(MAX_EVENTS),
             eventCount = it.eventCount + 1,
+            incidentCount = if (event.type == "INCIDENT") it.incidentCount + 1 else it.incidentCount,
         )
+    }
+
+    /** Replaces the relation edges (flushed once at session finalize). */
+    fun setRelations(relations: List<EventRelation>) = _state.update {
+        it.copy(relations = relations.takeLast(MAX_RELATIONS))
     }
 
     fun reset() {
@@ -116,5 +125,6 @@ class SessionBus {
 
     companion object {
         private const val MAX_EVENTS = 200
+        private const val MAX_RELATIONS = 120
     }
 }

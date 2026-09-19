@@ -19,6 +19,7 @@ import java.util.Locale
  * @param dedupMs minimum spacing between transients of the same kind
  */
 class EventExtractor(
+    private val ids: EventIdSequence = EventIdSequence(),
     private val triggerSigma: Double = 4.0,
     private val sustainedSigma: Double = 2.5,
     private val sustainedMs: Long = 800,
@@ -31,7 +32,6 @@ class EventExtractor(
      */
     private val transientOnlyKinds: Set<String> = DEFAULT_TRANSIENT_ONLY,
 ) {
-    private var nextId = 1L
     private val lastTransientAt = HashMap<String, Long>()
     private val sustainedSince = HashMap<String, Long>()
     private val lastSustainedEmitAt = HashMap<String, Long>()
@@ -52,7 +52,7 @@ class EventExtractor(
             if (passesDedup) {
                 lastTransientAt[kind] = observation.tMs
                 out += Event(
-                    id = nextId++,
+                    id = ids.nextId(),
                     sessionId = observation.sessionId,
                     tStartMs = observation.tMs,
                     tEndMs = observation.tMs,
@@ -73,7 +73,7 @@ class EventExtractor(
             if (observation.tMs - start >= sustainedMs && emitOk) {
                 lastSustainedEmitAt[kind] = observation.tMs
                 out += Event(
-                    id = nextId++,
+                    id = ids.nextId(),
                     sessionId = observation.sessionId,
                     tStartMs = start,
                     tEndMs = observation.tMs,

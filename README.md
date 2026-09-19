@@ -17,8 +17,13 @@ sensors ──► Observation (σ-scored) ──► EventExtractor (named events
   partial wake lock) owns `CameraSource`, `AudioSource`, `SensorSource`, `EnvironmentSource`.
 - **Perception layer** (`perception/`): deterministic DSP + `BaselineTracker` (adaptive EMA
   baseline; every value is scored as deviation-in-σ from "normal"). Pure Kotlin, JVM-tested.
-- **Fusion layer** (`fusion/EventExtractor.kt`): σ-threshold rules map observations to **named
-  event types** with dedup, sustained detection, and confidence tiers. Pure Kotlin, JVM-tested.
+- **Fusion layer** (`fusion/`): σ-threshold rules (`EventExtractor.kt`) map observations to
+  **named event types** with dedup and sustained detection, then the M1 correlation engine
+  (`CorrelationEngine.kt`) fuses co-occurring cross-modal events into CONFIRMED `INCIDENT`s
+  (A/V ±250 ms · audio↔motion ±400 ms · vision↔motion ±500 ms windows, one fusion group per
+  physical event), derives `CO_OCCURS`/`SUSTAINED_WITH`/`PRECEDES` relation edges, and emits
+  `PRE_INCIDENT_DEVIATION` when a sustained shift began 0.5–5 s before an incident — the
+  "why" the investigator cites. Co-occurrence, never causality. Pure Kotlin, JVM-tested.
 - **Persistence** (`data/EchoStore.kt`): every extracted event is written synchronously to a
   SQLite database at `files/echo/echo.db` (dedicated app-private folder) *before* it reaches
   the dashboard — the timeline survives restarts and is the M3 investigator's data source.
@@ -109,7 +114,7 @@ a compact, citation-formatted digest, and your questions are answered over it.
 
 ```bash
 ./gradlew :app:assembleDebug        # APK at app/build/outputs/apk/debug/
-./gradlew :app:testDebugUnitTest    # 45 JVM tests: DSP, baselines, tilt, extraction, rates
+./gradlew :app:testDebugUnitTest    # 80 JVM tests: DSP, baselines, tilt, extraction, correlation tiers, rates
 scripts/fetch_yamnet.sh             # fetch yamnet.tflite into assets (4.13 MB) before first run
 ```
 

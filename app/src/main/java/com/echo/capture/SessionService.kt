@@ -53,6 +53,9 @@ class SessionService : LifecycleService() {
     private var environmentSource: EnvironmentSource? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /** Live pipeline; owned by the service so END can finalize correlation. */
+    private var pipeline: PerceptionPipeline? = null
+
     /** DB row id of the session being recorded; 0 = none. */
     private var activeSessionId: Long = 0
 
@@ -146,9 +149,11 @@ class SessionService : LifecycleService() {
             deviceMeta = "tier=${profile.tier},sdk=${profile.sdkInt},ram=${profile.describeRam}",
             goal = goal,
         )
-        val pipeline = PerceptionPipeline(sessionBus) { event ->
-            store.insertEvent(activeSessionId, event)
-        }
+        val pipeline = PerceptionPipeline(
+            bus = sessionBus,
+            onEvent = { event -> store.insertEvent(activeSessionId, event) },
+            onRelation = { relation -> store.insertRelation(activeSessionId, relation) },
+        ).also { this.pipeline = it }
         val sessionClock = clock ?: return
 
         bus.update {
@@ -204,6 +209,11 @@ class SessionService : LifecycleService() {
 
         val store = EchoStore.get(this)
         if (activeSessionId > 0) {
+            // M1 finalize: derive PRE_INCIDENT_DEVIATION events and flush all
+            // relation edges. finalize() persists through the same hooks the
+            // live pipeline used, so derived events land in the DB before the
+            // session row is sealed.
+            pipeline?.finalize()
             store.endSession(
                 sessionId = activeSessionId,
                 endedAtEpochMs = System.currentTimeMillis(),
@@ -221,6 +231,7 @@ class SessionService : LifecycleService() {
         audioSource = null
         sensorSource = null
         environmentSource = null
+        pipeline = null
 
         wakeLock?.takeIf { it.isHeld }?.release()
         wakeLock = null

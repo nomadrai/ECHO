@@ -240,6 +240,11 @@ fun DashboardScreen(
 
         Spacer(Modifier.height(16.dp))
 
+        if (state.incidentCount > 0) {
+            Spacer(Modifier.height(12.dp))
+            IncidentCard(state)
+        }
+
         if (state.phase == SessionPhase.STOPPED && state.eventCount > 0) {
             SessionEndedCard(state)
             Spacer(Modifier.height(8.dp))
@@ -428,6 +433,62 @@ private fun EnvironmentCard(state: SessionBusState) {
                 if (env.stepCounterAvailable && env.stepCount >= 0) KeyValue("Steps", env.stepCount.toString())
                 if (env.temperatureAvailable) KeyValue("Ambient temp", fmt(env.temperatureC, 1) + " °C")
                 if (env.humidityAvailable) KeyValue("Humidity", fmt(env.humidityPct, 1) + " %")
+            }
+        }
+    }
+}
+
+/**
+ * M1 correlation, live: the fused CONFIRMED incidents and the co-occurrence
+ * edges that produced them (plan §7 — "co-occurrence, never causality").
+ */
+@Composable
+private fun IncidentCard(state: SessionBusState) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            SectionLabel("FUSED INCIDENTS (${state.incidentCount})")
+            Spacer(Modifier.height(6.dp))
+            state.events.filter { it.type == "INCIDENT" }.reversed().forEach { incident ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "E${incident.id} ${SessionClock.formatOffset(incident.tStartMs)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "INCIDENT",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "${incident.tier} ${fmt(incident.confidence, 2)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                }
+                Text(
+                    text = incident.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            if (state.relations.isNotEmpty()) {
+                SectionLabel("CORRELATION EDGES")
+                state.relations.takeLast(12).reversed().forEach { r ->
+                    Text(
+                        text = "E${r.fromEventId} —${r.kind.name}→ E${r.toEventId} " +
+                            "(Δt ${r.deltaMs} ms, conf ${fmt(r.confidence, 2)})",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

@@ -5,8 +5,10 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.util.Log
 import com.echo.core.model.Event
+import com.echo.core.model.EventRelation
 import com.echo.core.model.EventTier
 import com.echo.core.model.Modality
+import com.echo.core.model.RelationKind
 import java.io.File
 
 /**
@@ -53,6 +55,19 @@ class EchoStore private constructor(private val dbFile: File) {
         db.execSQL(
             "CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, t_start_ms)",
         )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS event_relations (" +
+                "session_id INTEGER NOT NULL," +
+                "from_runtime_id INTEGER NOT NULL," +
+                "to_runtime_id INTEGER NOT NULL," +
+                "kind INTEGER NOT NULL," +
+                "delta_ms INTEGER NOT NULL," +
+                "window_ms INTEGER NOT NULL," +
+                "confidence REAL NOT NULL)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_relations_session ON event_relations(session_id)",
+        )
         // Migration for stores created before the session-goal column existed.
         // CREATE TABLE IF NOT EXISTS never alters an existing table, so the
         // ALTER (duplicate-column error swallowed) is the upgrade path.
@@ -95,6 +110,23 @@ class EchoStore private constructor(private val dbFile: File) {
         return runCatching { db.insert(TABLE_EVENTS, null, values) }
             .onFailure { Log.e(TAG, "event insert failed: ${it.message}") }
             .getOrDefault(-1L)
+    }
+
+    /** Persists one correlation edge; edges reference events by runtime id. */
+    @Synchronized
+    fun insertRelation(sessionId: Long, relation: EventRelation) {
+        if (sessionId <= 0) return
+        val values = ContentValues().apply {
+            put("session_id", sessionId)
+            put("from_runtime_id", relation.fromEventId)
+            put("to_runtime_id", relation.toEventId)
+            put("kind", relation.kind.ordinal)
+            put("delta_ms", relation.deltaMs)
+            put("window_ms", relation.windowMs)
+            put("confidence", relation.confidence)
+        }
+        runCatching { db.insert("event_relations", null, values) }
+            .onFailure { Log.e(TAG, "relation insert failed: ${it.message}") }
     }
 
     /** Seals the session: end time, duration. */
@@ -172,6 +204,31 @@ class EchoStore private constructor(private val dbFile: File) {
                     confidence = cursor.getDouble(6),
                     salience = cursor.getDouble(7),
                     description = cursor.getString(8),
+                )
+            }
+        }
+        return out
+    }
+
+    /** Relation edges for a session, joined to event types for readability. */
+    @Synchronized
+    fun relationsForSession(sessionId: Long): List<EventRelation> {
+        if (sessionId <= 0) return emptyList()
+        val out = ArrayList<EventRelation>()
+        db.rawQuery(
+            "SELECT from_runtime_id, to_runtime_id, kind, delta_ms, window_ms, confidence " +
+                "FROM event_relations WHERE session_id = ?",
+            arrayOf(sessionId.toString()),
+        ).use { c ->
+            while (c.moveToNext()) {
+                val kind = RelationKind.entries[c.getInt(2).coerceIn(0, RelationKind.entries.size - 1)]
+                out += EventRelation(
+                    fromEventId = c.getLong(0),
+                    toEventId = c.getLong(1),
+                    kind = kind,
+                    deltaMs = c.getLong(3),
+                    windowMs = c.getLong(4),
+                    confidence = c.getDouble(5),
                 )
             }
         }
