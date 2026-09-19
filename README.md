@@ -91,11 +91,21 @@ Every sealed session appears under **Previous sessions** on the dashboard. Tap o
 a compact, citation-formatted digest, and your questions are answered over it.
 
 - **Local first:** the digest is built on-device by pure Kotlin; raw audio, frames and sensor
-  streams never leave the phone.
+  streams never leave the phone. The digest carries the **work context** (`WorkContext.kt`
+  classifies the user's stated goal into a domain and lists the signals that are
+  *expected-normal* for that work — motor hum and vibration in mechanical work, stirrer noise
+  in chemistry), so answers filter routine signals instead of narrating them. Events inside
+  the first 30 s are tagged `[baseline-calibration]` (the device learning the room), and the
+  M1 correlation edges (`CO_OCCURS` / `SUSTAINED_WITH` / `PRECEDES`) are included so the model
+  cites measured relations instead of guessing from timestamps.
 - **External model (optional, user-configured):** add an API key under *AI provider settings*
   for **Groq**, **Google AI Studio** or **OpenRouter** (all have free tiers). Keys are stored
   app-private and sent only to the provider you chose. The system prompt enforces
-  citation-first, non-causal answers (`[E7 @ +00:36.104] … may have preceded …`).
+  direct-first answers: answer the question in the first sentence, cite
+  `[E7 @ +00:36.104]` for every factual claim, ground conclusions in the cited events and
+  relation edges, keep non-causal language (`may have preceded …`), skip expected-normal
+  signals unless asked, and say "insufficient evidence" when the data does not support an
+  answer.
 - **Local LLM roadmap (M3):** LiteRT-LM with Gemma3-1B int4 on LOW-tier devices / Gemma4-E2B on
   the iQOO — the `DeviceProfile.llm` slot already exists. Until it lands, chat requires an
   external key; the M12 has no NPU and would be single-digit tokens/s on CPU.

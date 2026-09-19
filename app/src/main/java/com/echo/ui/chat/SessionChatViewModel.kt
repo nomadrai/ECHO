@@ -55,12 +55,16 @@ class SessionChatViewModel(application: Application) : AndroidViewModel(applicat
         if (_state.value.sessionId == sessionId && _state.value.digest.isNotEmpty()) return
         val record = store.listSessions().firstOrNull { it.id == sessionId }
         val events: List<Event> = store.eventsForSession(sessionId)
+        // M1 correlation edges persisted at session end — the digest renders
+        // them so the model cites measured relations instead of guessing.
+        val relations = store.relationsForSession(sessionId)
         val label = sessionLabel(sessionId)
         val digest = DigestBuilder.build(
             events = events,
             sessionLabel = label,
             durationMs = record?.durationMs ?: 0L,
             goal = record?.goal ?: "",
+            relations = relations,
         )
         _state.value = SessionChatState(
             sessionId = sessionId,
