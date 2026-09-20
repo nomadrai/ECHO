@@ -16,6 +16,8 @@ data class ChannelSeries(
     val modality: Modality,
     val unit: String,
     val samples: List<Sample>,
+    /** How this channel's deviations are detected (a channel uses one method). */
+    val detector: DetectorKind = DetectorKind.LEVEL,
 ) {
     /** One measured value at a session-relative millisecond timestamp. */
     data class Sample(val tMs: Long, val value: Double)
@@ -54,11 +56,46 @@ data class AnalyzerConfig(
     /** Deviation above this many σ (rate-of-change) flags a jump. */
     val rateSigma: Double = 4.0,
     /**
-     * Minimum σ gap between baseline noise and flagged anomalies. Channels
-     * with post-warmup σ below this are treated as quiet and effectively
-     * exempt (their variation is calibration drift, not signal).
+     * Quiet-channel bar. A channel whose *rolling* σ (before the relative
+     * floor) stays below this is considered near-constant — a resting phone,
+     * a silent room. Its sub-[levelSigma] wobble is calibration drift, not
+     * signal: a spike needs the full [levelSigma] to count instantly, and a
+     * sustained episode must hold for [quietSustainedMs] (not just
+     * [minEpisodeMs]) to be kept — real Gaussian noise on a quiet channel
+     * produces 2–3 σ blips lasting ~2 s, never tens of seconds. Genuine
+     * deviations on quiet channels are enormous in σ (a door slam in a
+     * dead-quiet room is hundreds of σ) and still flag instantly.
      */
     val minNoiseSigma: Double = 0.25,
+    /**
+     * How long a sustained episode on a quiet channel must hold before it is
+     * kept (see [minNoiseSigma]). Non-quiet channels use [minEpisodeMs].
+     */
+    val quietSustainedMs: Long = 10_000,
+    /**
+     * σ never drops below this fraction of |mean| (same idea as the online
+     * [com.echo.perception.BaselineTracker] relative floor): a near-constant
+     * signal with ±2 % wobble must not turn 5 % excursions into 5σ events.
+     * Applied per window, on top of the raw rolling σ.
+     */
+    val relativeSigmaFloor: Double = 0.05,
+    /**
+     * RATE channels score step-to-step deltas, whose raw σ can be microscopic
+     * (a quiet barometer's walk is ±0.001 hPa) — without a scale floor every
+     * real step becomes hundreds of σ and weather noise floods the timeline.
+     * The floor is this fraction of the channel's overall |mean level| — the
+     * same 0.02 % the online barometer baseline is tuned to — so typical
+     * per-step weather noise stays invisible while genuine transients (a door
+     * slam's pressure wave, an HVAC damper snap) still clear it. Channels
+     * centred near zero (tilt rate) get a ≈0 floor and fall back to raw σ.
+     */
+    val rateRelativeFloor: Double = 0.0002,
+    /**
+     * No detection before this many scored samples: the baseline must learn
+     * the room first. The first seconds of a session are calibration, not
+     * evidence (mirrors the digest's 30 s baseline-calibration window).
+     */
+    val minWarmupSamples: Int = 50,
     /** An episode stays open while values exceed this σ. */
     val episodeSigma: Double = 2.5,
     /** Minimum duration for a distinct sustained episode. */
