@@ -17,7 +17,10 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.echo.R
 import com.echo.core.device.DeviceProfile
+import com.echo.core.model.ManualTag
 import com.echo.core.model.Modality
+import com.echo.core.model.TagCategory
+import com.echo.core.model.TimelineSource
 import com.echo.core.time.SessionClock
 import com.echo.data.EchoStore
 import kotlinx.coroutines.delay
@@ -45,6 +48,20 @@ class SessionService : LifecycleService() {
          * pre-selection behaviour, kept as a safe fallback for raw starts.
          */
         const val EXTRA_CHANNELS = "com.echo.extra.SESSION_CHANNELS"
+
+        /**
+         * Tag-this-moment intent, sent by the dashboard. The service owns the
+         * clock and the active session id, so it — not the activity — stamps
+         * the tag: one tap, service-side timestamp, no clock skew and no gap
+         * between what the user marked and what the sensors saw.
+         */
+        const val ACTION_TAG = "com.echo.action.TAG_MOMENT"
+
+        /** Label text for [ACTION_TAG]. */
+        const val EXTRA_TAG_LABEL = "com.echo.extra.TAG_LABEL"
+
+        /** [com.echo.core.model.TagCategory] name for [ACTION_TAG]. */
+        const val EXTRA_TAG_CATEGORY = "com.echo.extra.TAG_CATEGORY"
 
         private const val TAG = "EchoSession"
         private const val CHANNEL_ID = "echo_session"
@@ -101,6 +118,10 @@ class SessionService : LifecycleService() {
                 channels = SensorChannelCodec.parse(intent.getStringExtra(EXTRA_CHANNELS)),
             )
             ACTION_STOP -> stopSession()
+            ACTION_TAG -> tagMoment(
+                label = intent.getStringExtra(EXTRA_TAG_LABEL) ?: "",
+                category = TagCategory.fromName(intent.getStringExtra(EXTRA_TAG_CATEGORY)),
+            )
         }
         return START_STICKY
     }
@@ -228,6 +249,28 @@ class SessionService : LifecycleService() {
             "session started (tier=${profile.tier}, llm=${profile.llm.name}, " +
                 "channels=${enabled.joinToString("+") { it.id }})",
         )
+    }
+
+    /**
+     * Live tagging: stamps the moment with the session clock, persists the
+     * tag through the same serialized store the events use, and only then
+     * raises it on the bus — the DB is the source of truth, exactly like
+     * events. Ignored when no session is active (a stale intent arriving
+     * after END must not create an orphan row).
+     */
+    private fun tagMoment(label: String, category: TagCategory) {
+        val sessionId = activeSessionId
+        if (sessionId <= 0) return
+        val tag = ManualTag(
+            sessionId = sessionId,
+            tMs = clock?.elapsedMs() ?: 0L,
+            label = label.trim().ifEmpty { "Tagged moment" },
+            category = category,
+            source = TimelineSource.USER,
+            createdAtEpochMs = System.currentTimeMillis(),
+        )
+        val rowId = EchoStore.get(this).insertTag(sessionId, tag)
+        bus.addTag(if (rowId > 0) tag.copy(id = rowId) else tag)
     }
 
     private fun stopSession() {

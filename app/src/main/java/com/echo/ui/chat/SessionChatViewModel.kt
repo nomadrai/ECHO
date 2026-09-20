@@ -7,7 +7,10 @@ import com.echo.ai.ApiSettingsStore
 import com.echo.ai.DigestBuilder
 import com.echo.ai.ExternalAiClient
 import com.echo.core.model.Event
+import com.echo.core.model.ManualTag
+import com.echo.core.model.TagCategory
 import com.echo.data.EchoStore
+import com.echo.ui.tagging.saveTag
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +30,10 @@ data class SessionChatState(
     val sessionLabel: String = "",
     val digest: String = "",
     val eventCount: Int = 0,
+    /** The session's events in timeline order — drives the review scrubber. */
+    val events: List<Event> = emptyList(),
+    /** Manual tags for this session, timeline order (review + retro tag). */
+    val tags: List<ManualTag> = emptyList(),
     /** What the user said they were building, shown above the chat. */
     val goal: String = "",
     val messages: List<ChatMessage> = emptyList(),
@@ -58,6 +65,9 @@ class SessionChatViewModel(application: Application) : AndroidViewModel(applicat
         // M1 correlation edges persisted at session end — the digest renders
         // them so the model cites measured relations instead of guessing.
         val relations = store.relationsForSession(sessionId)
+        // Manual tags ride in the same digest (own section, T# citations) —
+        // the model sees what the user marked, never raw sensor data.
+        val tags: List<ManualTag> = store.tagsForSession(sessionId)
         val label = sessionLabel(sessionId)
         val digest = DigestBuilder.build(
             events = events,
@@ -65,16 +75,40 @@ class SessionChatViewModel(application: Application) : AndroidViewModel(applicat
             durationMs = record?.durationMs ?: 0L,
             goal = record?.goal ?: "",
             relations = relations,
+            tags = tags,
         )
         _state.value = SessionChatState(
             sessionId = sessionId,
             sessionLabel = label,
             digest = digest,
             eventCount = events.size,
+            events = events,
+            tags = tags,
             goal = record?.goal ?: "",
             providerLabel = providerLabel(),
             apiKeyMissing = !apiSettings.isConfigured(),
         )
+    }
+
+    /**
+     * Retro-tagging: stamps the moment the user picked on the timeline and
+     * persists it, then reloads so the digest (and the tag list) include it
+     * for the next question.
+     */
+    fun addRetroactiveTag(tMs: Long, label: String, category: TagCategory) {
+        val sessionId = _state.value.sessionId
+        if (sessionId <= 0) return
+        viewModelScope.launch {
+            saveTag(
+                store = store,
+                sessionId = sessionId,
+                tMs = tMs,
+                label = label,
+                category = category,
+                createdAtEpochMs = System.currentTimeMillis(),
+            )
+            load(sessionId)
+        }
     }
 
     fun ask(question: String) {

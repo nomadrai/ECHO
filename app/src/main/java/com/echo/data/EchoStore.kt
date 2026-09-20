@@ -7,8 +7,11 @@ import android.util.Log
 import com.echo.core.model.Event
 import com.echo.core.model.EventRelation
 import com.echo.core.model.EventTier
+import com.echo.core.model.ManualTag
 import com.echo.core.model.Modality
 import com.echo.core.model.RelationKind
+import com.echo.core.model.TagCategory
+import com.echo.core.model.TimelineSource
 import java.io.File
 
 /**
@@ -74,6 +77,23 @@ class EchoStore private constructor(private val dbFile: File) {
         runCatching {
             db.execSQL("ALTER TABLE sessions ADD COLUMN intent TEXT NOT NULL DEFAULT ''")
         }
+        // Manual tags live in their own table — never inside events — so the
+        // two sources of truth stay separable for the later validation pass
+        // (user tag vs auto-detected event accuracy checking).
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS manual_tags (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                "session_id INTEGER NOT NULL," +
+                "t_ms INTEGER NOT NULL," +
+                "label TEXT NOT NULL," +
+                "category TEXT NOT NULL," +
+                "source TEXT NOT NULL," +
+                "matched_event_id INTEGER," +
+                "created_at_epoch_ms INTEGER NOT NULL)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_tags_session ON manual_tags(session_id, t_ms)",
+        )
     }
 
     /**
@@ -127,6 +147,78 @@ class EchoStore private constructor(private val dbFile: File) {
         }
         runCatching { db.insert("event_relations", null, values) }
             .onFailure { Log.e(TAG, "relation insert failed: ${it.message}") }
+    }
+
+    /**
+     * Persists one manual tag; returns the row id (or -1 on failure, logged).
+     * [matchedEventId] is null at creation — a later validation pass links
+     * the tag to an auto-detected event via [setTagMatchedEvent].
+     */
+    @Synchronized
+    fun insertTag(sessionId: Long, tag: ManualTag): Long {
+        if (sessionId <= 0) return -1L
+        val values = ContentValues().apply {
+            put("session_id", sessionId)
+            put("t_ms", tag.tMs)
+            put("label", tag.label)
+            put("category", tag.category.name)
+            put("source", tag.source.name)
+            put("matched_event_id", tag.matchedEventId)
+            put("created_at_epoch_ms", tag.createdAtEpochMs)
+        }
+        return runCatching { db.insert(TABLE_TAGS, null, values) }
+            .onFailure { Log.e(TAG, "tag insert failed: ${it.message}") }
+            .getOrDefault(-1L)
+    }
+
+    /** Manual tags for a session in timeline order (merged into the UI). */
+    @Synchronized
+    fun tagsForSession(sessionId: Long): List<ManualTag> {
+        if (sessionId <= 0) return emptyList()
+        val out = ArrayList<ManualTag>()
+        db.rawQuery(
+            "SELECT id, t_ms, label, category, source, matched_event_id, " +
+                "created_at_epoch_ms FROM manual_tags WHERE session_id = ? " +
+                "ORDER BY t_ms, id",
+            arrayOf(sessionId.toString()),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out += ManualTag(
+                    id = c.getLong(0),
+                    sessionId = sessionId,
+                    tMs = c.getLong(1),
+                    label = c.getString(2) ?: "",
+                    category = TagCategory.fromName(c.getString(3)),
+                    source = if (c.getString(4) == TimelineSource.AUTO_DETECTED.name) {
+                        TimelineSource.AUTO_DETECTED
+                    } else {
+                        TimelineSource.USER
+                    },
+                    matchedEventId = if (c.isNull(5)) null else c.getLong(5),
+                    createdAtEpochMs = c.getLong(6),
+                )
+            }
+        }
+        return out
+    }
+
+    /**
+     * Validation hook: links a manual tag to the auto-detected event it
+     * agrees (or disagrees) with. Idempotent — re-linking overwrites.
+     */
+    @Synchronized
+    fun setTagMatchedEvent(tagId: Long, matchedEventId: Long?) {
+        if (tagId <= 0) return
+        val values = ContentValues().apply {
+            if (matchedEventId == null) {
+                putNull("matched_event_id")
+            } else {
+                put("matched_event_id", matchedEventId)
+            }
+        }
+        runCatching {
+            db.update(TABLE_TAGS, values, "id = ?", arrayOf(tagId.toString()))
+        }.onFailure { Log.e(TAG, "tag match update failed: ${it.message}") }
     }
 
     /** Seals the session: end time, duration. */
@@ -251,10 +343,73 @@ class EchoStore private constructor(private val dbFile: File) {
     @Synchronized
     fun databaseBytes(): Long = dbFile.length()
 
+    /** One manual-tag row, joined with its session's start for history lists. */
+    @Synchronized
+    fun tagCountForSession(sessionId: Long): Int {
+        if (sessionId <= 0) return 0
+        db.rawQuery(
+            "SELECT COUNT(*) FROM manual_tags WHERE session_id = ?",
+            arrayOf(sessionId.toString()),
+        ).use { c ->
+            if (c.moveToFirst()) return c.getInt(0)
+        }
+        return 0
+    }
+
+    /**
+     * Cross-session pre-aggregation (trends): event counts per (session, type)
+     * in one indexed pass. One row per type per session; sessions in
+     * [sessionIds] with zero events are simply absent — callers treat missing
+     * as zero. Never touches raw sensor data; the timeline rows are all a
+     * comparison needs.
+     */
+    @Synchronized
+    fun eventTypeCountsForSessions(sessionIds: List<Long>): Map<Long, Map<String, Int>> {
+        if (sessionIds.isEmpty()) return emptyMap()
+        val out = HashMap<Long, HashMap<String, Int>>()
+        sessionIds.chunked(SQLITE_VAR_LIMIT).forEach { chunk ->
+            val placeholders = chunk.joinToString(",") { "?" }
+            db.rawQuery(
+                "SELECT session_id, type, COUNT(*) FROM events " +
+                    "WHERE session_id IN ($placeholders) GROUP BY session_id, type",
+                chunk.map { it.toString() }.toTypedArray(),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    out.getOrPut(c.getLong(0)) { HashMap() }[c.getString(1)] = c.getInt(2)
+                }
+            }
+        }
+        return out
+    }
+
+    /** Cross-session manual-tag counts, one indexed pass (trends). */
+    @Synchronized
+    fun tagCountsForSessions(sessionIds: List<Long>): Map<Long, Int> {
+        if (sessionIds.isEmpty()) return emptyMap()
+        val out = HashMap<Long, Int>()
+        sessionIds.chunked(SQLITE_VAR_LIMIT).forEach { chunk ->
+            val placeholders = chunk.joinToString(",") { "?" }
+            db.rawQuery(
+                "SELECT session_id, COUNT(*) FROM manual_tags " +
+                    "WHERE session_id IN ($placeholders) GROUP BY session_id",
+                chunk.map { it.toString() }.toTypedArray(),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    out[c.getLong(0)] = c.getInt(1)
+                }
+            }
+        }
+        return out
+    }
+
     companion object {
         private const val TAG = "EchoStore"
         private const val TABLE_SESSIONS = "sessions"
         private const val TABLE_EVENTS = "events"
+        private const val TABLE_TAGS = "manual_tags"
+
+        /** SQLite's default host-parameter cap — the reason chunked IN() lists. */
+        private const val SQLITE_VAR_LIMIT = 500
 
         @Volatile
         private var instance: EchoStore? = null

@@ -2,8 +2,11 @@ package com.echo.ai
 
 import com.echo.core.model.Event
 import com.echo.core.model.EventRelation
+import com.echo.core.model.ManualTag
 import com.echo.core.model.RelationKind
+import com.echo.core.model.TagCategory
 import com.echo.core.time.SessionClock
+import kotlin.math.abs
 import kotlin.math.min
 
 /**
@@ -33,6 +36,7 @@ object DigestBuilder {
         maxEvents: Int = 120,
         goal: String = "",
         relations: List<EventRelation> = emptyList(),
+        tags: List<ManualTag> = emptyList(),
     ): String {
         val buf = StringBuilder()
         buf.append("SESSION: ").append(sessionLabel).append('\n')
@@ -79,6 +83,43 @@ object DigestBuilder {
         // Correlation edges from the M1 engine (authoritative): relations the
         // model may cite instead of inferring adjacency from timestamps.
         buf.append(buildRelations(relations, shown))
+        // Manual tags: what the user marked by hand, with any near-coincident
+        // auto event — the model can reason about agreement/disagreement
+        // between human attention and the detectors.
+        buf.append(buildTags(tags, shown))
+        return buf.toString()
+    }
+
+    /**
+     * Manual tags as their own section — separate from EVENTS (which is
+     * detector output only), compact and citable: every line carries a TAG
+     * citation id and the session-relative timestamp. A tag within
+     * [TAG_MATCH_WINDOW_MS] of an auto event is annotated with that event's
+     * citation so the model can say "you tagged X, and the audio sensor also
+     * flagged Y in the same second". This window is presentation-only: no
+     * match is written back to storage here.
+     */
+    private fun buildTags(tags: List<ManualTag>, shown: List<Event>): String {
+        if (tags.isEmpty()) return ""
+        val buf = StringBuilder()
+        buf.append("MANUAL TAGS (user-created, distinct from detected events):\n")
+        for (t in tags) {
+            buf.append("[T").append(t.id).append(" @ ")
+                .append(SessionClock.formatOffset(t.tMs)).append("] ")
+            if (t.category != TagCategory.NOTE) {
+                buf.append("(").append(t.category.name).append(") ")
+            }
+            buf.append(t.label)
+            val near = shown
+                .filter { abs(it.tStartMs - t.tMs) <= TAG_MATCH_WINDOW_MS }
+                .minByOrNull { abs(it.tStartMs - t.tMs) }
+            if (near != null) {
+                buf.append(" — near-coincident with E").append(near.id)
+                    .append(" (@ ").append(SessionClock.formatOffset(near.tStartMs))
+                    .append(", ").append(near.type).append(")")
+            }
+            buf.append('\n')
+        }
         return buf.toString()
     }
 
@@ -144,6 +185,9 @@ object DigestBuilder {
      * inside it are the device learning the room, not incidents.
      */
     const val BASELINE_MS = 30_000L
+
+    /** A tag and an event within this window are shown as near-coincident. */
+    const val TAG_MATCH_WINDOW_MS = 1_000L
 
     private const val MAX_RELATIONS = 40
 

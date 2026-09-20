@@ -58,3 +58,53 @@ data class Event(
     val observationIds: List<Long> = emptyList(),
     val evidenceIds: List<Long> = emptyList(),
 )
+
+/**
+ * Where a timeline item came from. User tags and auto-detected events share
+ * the timeline but are never conflated: the source is stored, not implied.
+ */
+enum class TimelineSource { USER, AUTO_DETECTED }
+
+/**
+ * Coarse preset buckets a manual tag can fall under (free text is allowed —
+ * the category is always optional and defaults to [NOTE]).
+ */
+enum class TagCategory {
+    STARTED, NOISE, ANOMALY, WOKE_UP, NOTE;
+
+    companion object {
+        /** Parses a stored name safely; unknown names degrade to [NOTE]. */
+        fun fromName(name: String?): TagCategory =
+            entries.firstOrNull { it.name == name } ?: NOTE
+    }
+}
+
+/**
+ * A moment the user marked by hand — live ("tag this moment") or
+ * retroactively during review. Stored in its own table, separate from
+ * auto-detected [Event]s, and merged only at display/digest time.
+ *
+ * @param id          store row id (0 until persisted)
+ * @param sessionId   owning session
+ * @param tMs         session-relative timestamp the user marked
+ * @param label       free text naming what happened
+ * @param category    optional preset bucket, [TagCategory.NOTE] when none
+ * @param source      provenance, stored explicitly (USER for anything the
+ *                    user created; the field exists so timeline consumers
+ *                    never infer it)
+ * @param matchedEventId  left null at creation — filled later when a
+ *                    validation pass links this tag to an auto-detected
+ *                    event (accuracy checking, plan §10); nullable forever
+ * @param createdAtEpochMs  wall-clock time the tag was written, so retro
+ *                    tags are distinguishable from live ones
+ */
+data class ManualTag(
+    val id: Long = 0,
+    val sessionId: Long = 0,
+    val tMs: Long,
+    val label: String,
+    val category: TagCategory = TagCategory.NOTE,
+    val source: TimelineSource = TimelineSource.USER,
+    val matchedEventId: Long? = null,
+    val createdAtEpochMs: Long = 0,
+)

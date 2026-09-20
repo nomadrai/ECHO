@@ -18,12 +18,16 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,9 +40,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.echo.core.time.SessionClock
+import com.echo.ui.tagging.TagMomentDialog
+import com.echo.ui.tagging.TimelineItem
+import com.echo.ui.tagging.TagColor
+import com.echo.ui.tagging.mergeTimeline
 
 /**
  * Investigator chat for one sealed session: user questions, model answers
@@ -55,6 +65,21 @@ fun SessionChatScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var input by remember { mutableStateOf("") }
+
+    // Retro-tagging: scrub the timeline, then label the moment. The stamp
+    // is captured when the dialog OPENS (matching live tagging semantics).
+    var tagDialogMs by remember { mutableStateOf<Long?>(null) }
+    tagDialogMs?.let { stampMs ->
+        TagMomentDialog(
+            title = "Tag at " + SessionClock.formatOffset(stampMs),
+            initialMs = stampMs,
+            onDismiss = { tagDialogMs = null },
+            onConfirm = { label, category ->
+                tagDialogMs = null
+                viewModel.addRetroactiveTag(stampMs, label, category)
+            },
+        )
+    }
 
     LaunchedEffect(sessionId) { viewModel.load(sessionId) }
 
@@ -89,7 +114,6 @@ fun SessionChatScreen(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-
         // The stated goal — the AI judges detections against this. Tappable
         // to correct it; the digest is rebuilt from the stored value.
         var editingGoal by remember(state.sessionId) { mutableStateOf(false) }
@@ -125,6 +149,13 @@ fun SessionChatScreen(
                 modifier = Modifier.clickable { editingGoal = true },
             )
         }
+
+        Spacer(Modifier.height(8.dp))
+
+        TimelineReviewCard(
+            state = state,
+            onTagPoint = { ms -> tagDialogMs = ms },
+        )
 
         Spacer(Modifier.height(8.dp))
 
@@ -203,6 +234,139 @@ fun SessionChatScreen(
                 enabled = !state.busy && input.isNotBlank(),
             ) {
                 Text("Ask")
+            }
+        }
+    }
+}
+
+/**
+ * Post-session review: scrub the sealed session's timeline and add a tag
+ * retroactively at any point. The merged list shows auto-detected events
+ * (E#) and manual tags (T#, teal) distinctly but on one timeline.
+ */
+@Composable
+private fun TimelineReviewCard(
+    state: SessionChatState,
+    onTagPoint: (Long) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp)) {
+            var scrubMs by remember(state.sessionId) {
+                mutableStateOf(if (state.tags.isNotEmpty()) state.tags.first().tMs else 0L)
+            }
+            val duration = (state.events.maxOfOrNull { it.tEndMs } ?: 0L)
+                .coerceAtLeast(state.tags.maxOfOrNull { it.tMs } ?: 0L)
+                .coerceAtLeast(1_000L)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "TIMELINE",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "${state.eventCount} events · ${state.tags.size} tags",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = SessionClock.formatOffset(scrubMs),
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = FontFamily.Monospace,
+            )
+            Slider(
+                value = scrubMs.toFloat(),
+                onValueChange = { scrubMs = it.toLong() },
+                valueRange = 0f..duration.toFloat(),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Scrub to any point",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedButton(onClick = { onTagPoint(scrubMs) }) {
+                    Text("Tag here")
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            // Merged timeline, chronological. Events keep their tier colour;
+            // tags are teal with a T# citation — never conflated.
+            val merged = remember(state.events, state.tags) {
+                mergeTimeline(state.events, state.tags).takeLast(60)
+            }
+            if (merged.isEmpty()) {
+                Text(
+                    text = "Nothing on this timeline yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Column(Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())) {
+                    merged.forEach { item ->
+                        TimelineReviewRow(item)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimelineReviewRow(item: TimelineItem) {
+    when (item) {
+        is TimelineItem.TagItem -> {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "T${item.tag.id} ${SessionClock.formatOffset(item.tag.tMs)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = TagColor,
+                )
+                Spacer(Modifier.width(8.dp))
+                if (item.tag.category != com.echo.core.model.TagCategory.NOTE) {
+                    Text(
+                        text = item.tag.category.name,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = TagColor,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(text = item.tag.label, style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "MANUAL",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = TagColor,
+                )
+            }
+        }
+        is TimelineItem.EventItem -> {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "E${item.event.id} ${SessionClock.formatOffset(item.event.tStartMs)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = item.event.type,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "AUTO",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

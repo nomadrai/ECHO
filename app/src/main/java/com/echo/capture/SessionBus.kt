@@ -2,6 +2,7 @@ package com.echo.capture
 
 import com.echo.core.model.Event
 import com.echo.core.model.EventRelation
+import com.echo.core.model.ManualTag
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -91,6 +92,13 @@ data class SessionBusState(
     val eventCount: Int = 0,
     val relations: List<EventRelation> = emptyList(),
     val incidentCount: Int = 0,
+
+    /**
+     * User-created manual tags (live + retro), newest-last — kept alongside
+     * events, never merged into them. Mirrors insertEvent's takeLast cap.
+     */
+    val tags: List<ManualTag> = emptyList(),
+    val tagCount: Int = 0,
 )
 
 /**
@@ -119,6 +127,14 @@ class SessionBus {
     /** Replaces the relation edges (flushed once at session finalize). */
     fun setRelations(relations: List<EventRelation>) = _state.update {
         it.copy(relations = relations.takeLast(MAX_RELATIONS))
+    }
+
+    /** Adds one manual tag to the live feed; capped like events. */
+    fun addTag(tag: ManualTag) = _state.update {
+        it.copy(
+            tags = (it.tags + tag).takeLast(MAX_EVENTS),
+            tagCount = it.tagCount + 1,
+        )
     }
 
     fun reset() {

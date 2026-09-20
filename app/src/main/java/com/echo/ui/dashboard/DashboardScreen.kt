@@ -28,6 +28,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
@@ -54,7 +55,11 @@ import com.echo.capture.SessionPhase
 import com.echo.capture.SessionService
 import com.echo.core.model.Event
 import com.echo.core.model.EventTier
+import com.echo.core.model.TagCategory
 import com.echo.core.time.SessionClock
+import com.echo.ui.tagging.TimelineItem
+import com.echo.ui.tagging.TagMomentDialog
+import com.echo.ui.tagging.mergeTimeline
 import java.util.Locale
 
 private val WarningAmber = Color(0xFFFFC857)
@@ -91,9 +96,33 @@ fun DashboardRoute(
         )
     }
 
+    // Live tagging: the dialog captures its timestamp the instant it opens
+    // (not on save) so the label UI never delays the recorded moment.
+    var showTagDialog by remember { mutableStateOf(false) }
+    var tagMs by remember { mutableStateOf(0L) }
+    if (showTagDialog) {
+        TagMomentDialog(
+            title = "Tag this moment",
+            initialMs = tagMs,
+            onDismiss = { showTagDialog = false },
+            onConfirm = { label, category ->
+                showTagDialog = false
+                val intent = Intent(context, SessionService::class.java)
+                    .setAction(SessionService.ACTION_TAG)
+                    .putExtra(SessionService.EXTRA_TAG_LABEL, label)
+                    .putExtra(SessionService.EXTRA_TAG_CATEGORY, category.name)
+                context.startService(intent)
+            },
+        )
+    }
+
     DashboardScreen(
         state = state,
         onStart = { showSetupDialog = true },
+        onTagMoment = {
+            tagMs = state.sessionMs
+            showTagDialog = true
+        },
         onStop = {
             val intent = Intent(context, SessionService::class.java)
                 .setAction(SessionService.ACTION_STOP)
@@ -271,6 +300,7 @@ fun DashboardScreen(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onBack: () -> Unit,
+    onTagMoment: () -> Unit = {},
     onHistory: () -> Unit = {},
     onApiSettings: () -> Unit = {},
 ) {
@@ -345,6 +375,18 @@ fun DashboardScreen(
             )
         }
 
+        // Quick tag: visible only while recording, one tap to timestamp,
+        // optional detail after — never blocking capture.
+        if (state.phase == SessionPhase.RECORDING) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onTagMoment,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("TAG THIS MOMENT", fontWeight = FontWeight.Bold)
+            }
+        }
+
         if (state.health.degraded) {
             Spacer(Modifier.height(8.dp))
             Text(
@@ -400,6 +442,11 @@ fun DashboardScreen(
         if (state.incidentCount > 0) {
             Spacer(Modifier.height(12.dp))
             IncidentCard(state)
+        }
+
+        if (state.tagCount > 0) {
+            Spacer(Modifier.height(12.dp))
+            ManualTagsCard(state)
         }
 
         if (state.phase == SessionPhase.STOPPED && state.eventCount > 0) {
@@ -600,6 +647,44 @@ private fun EnvironmentCard(state: SessionBusState) {
                 if (env.stepCounterAvailable && env.stepCount >= 0) KeyValue("Steps", env.stepCount.toString())
                 if (env.temperatureAvailable) KeyValue("Ambient temp", fmt(env.temperatureC, 1) + " °C")
                 if (env.humidityAvailable) KeyValue("Humidity", fmt(env.humidityPct, 1) + " %")
+            }
+        }
+    }
+}
+
+/**
+ * Manual tags on the live dashboard: teal citation ids (T#) so the user can
+ * tell user-created entries from detector output (E#) at a glance.
+ */
+@Composable
+private fun ManualTagsCard(state: SessionBusState) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            SectionLabel("MANUAL TAGS (${state.tagCount})")
+            Spacer(Modifier.height(6.dp))
+            state.tags.reversed().forEach { tag ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "T${tag.id} ${SessionClock.formatOffset(tag.tMs)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = com.echo.ui.tagging.TagColor,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    if (tag.category != TagCategory.NOTE) {
+                        Text(
+                            text = tag.category.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = com.echo.ui.tagging.TagColor,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        text = tag.label,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
     }

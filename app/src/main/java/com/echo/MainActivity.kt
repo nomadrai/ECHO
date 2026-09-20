@@ -14,6 +14,7 @@ import com.echo.ui.chat.SessionChatScreen
 import com.echo.ui.dashboard.DashboardRoute
 import com.echo.ui.preflight.PreflightRoute
 import com.echo.ui.theme.EchoTheme
+import com.echo.ui.trends.TrendsScreen
 
 /**
  * Single-activity host: pre-flight checks, live dashboard, session history,
@@ -27,7 +28,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             EchoTheme {
                 // screen grammar: "preflight" | "dashboard" | "history" |
-                // "chat:<sessionId>" | "api"
+                // "chat:<sessionId>" | "trends:<id,id,…>" | "api"
                 var screen by rememberSaveable { mutableStateOf("preflight") }
 
                 // The API settings / history screens can be opened from several
@@ -60,6 +61,11 @@ class MainActivity : ComponentActivity() {
                         onBack = { screen = if (historyFromPreflight) "preflight" else "dashboard" },
                         backLabel = if (historyFromPreflight) "← Pre-flight" else "← Dashboard",
                         onOpenSession = { id -> screen = "chat:$id" },
+                        onCompare = { ids ->
+                            // Survives process death like chat ids: the set
+                            // rides inside the route string.
+                            screen = "trends:" + ids.joinToString(",")
+                        },
                     )
                     screen == "api" -> ApiSettingsScreen(
                         onBack = { screen = returnAfterApi },
@@ -68,6 +74,12 @@ class MainActivity : ComponentActivity() {
                         sessionId = screen.removePrefix("chat:").toLongOrNull() ?: 0L,
                         onBack = { screen = "history" },
                         onOpenApiSettings = { openApi() },
+                    )
+                    screen.startsWith("trends:") -> TrendsScreen(
+                        sessionIds = screen.removePrefix("trends:").split(",")
+                            .mapNotNull { it.toLongOrNull() },
+                        onBack = { screen = "history" },
+                        onOpenSession = { id -> screen = "chat:$id" },
                     )
                 }
             }
