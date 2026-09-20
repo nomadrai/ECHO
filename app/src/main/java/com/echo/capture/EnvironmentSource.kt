@@ -43,6 +43,7 @@ class EnvironmentSource(
     private val clock: MonotonicClock,
     private val bus: SessionBus,
     private val pipeline: PerceptionPipeline,
+    private val enabled: Set<SensorChannel> = SensorChannel.ALL,
 ) : SensorEventListener {
 
     private var manager: SensorManager? = null
@@ -68,13 +69,16 @@ class EnvironmentSource(
         }
         manager = sm
 
-        val magnetic = sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
-        val pressure = sm.getDefaultSensor(Sensor.TYPE_PRESSURE)
-        val light = sm.getDefaultSensor(Sensor.TYPE_LIGHT)
-        val proximity = sm.getDefaultSensor(Sensor.TYPE_PROXIMITY)
-        val stepCounter = sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
-        val temperature = sm.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE)
-        val humidity = sm.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY)
+        // Presence AND selection: a sensor that exists but was disabled for
+        // this session is never registered — and reports as unavailable.
+        val magnetic = if (SensorChannel.MAGNETOMETER in enabled) sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD) else null
+        val pressure = if (SensorChannel.BAROMETER in enabled) sm.getDefaultSensor(Sensor.TYPE_PRESSURE) else null
+        val light = if (SensorChannel.LIGHT in enabled) sm.getDefaultSensor(Sensor.TYPE_LIGHT) else null
+        val proximity = if (SensorChannel.PROXIMITY in enabled) sm.getDefaultSensor(Sensor.TYPE_PROXIMITY) else null
+        val stepCounter = if (SensorChannel.STEPS in enabled) sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) else null
+        val climateEnabled = SensorChannel.CLIMATE in enabled
+        val temperature = if (climateEnabled) sm.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE) else null
+        val humidity = if (climateEnabled) sm.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY) else null
 
         bus.update {
             it.copy(
@@ -102,7 +106,7 @@ class EnvironmentSource(
         humidity?.let { anyRegistered = anyRegistered or sm.registerListener(this, it, SENSOR_DELAY_SLOWISH) }
 
         if (!anyRegistered) {
-            Log.w(TAG, "no environment sensors present on this device")
+            Log.w(TAG, "no enabled environment sensors present on this device")
         }
     }
 

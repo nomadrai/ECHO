@@ -79,6 +79,8 @@ data class SessionBusState(
     val phase: SessionPhase = SessionPhase.IDLE,
     val startedAtEpochMs: Long? = null,
     val sessionMs: Long = 0,
+    /** Channels enabled for the current/most recent session (live UI). */
+    val selectedChannels: Set<SensorChannel> = emptySet(),
     val rates: DetectorRates = DetectorRates(),
     val health: DetectorHealth = DetectorHealth(),
     val audio: AudioLevels = AudioLevels(),

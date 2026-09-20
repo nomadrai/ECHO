@@ -35,6 +35,7 @@ class SensorSource(
     private val clock: MonotonicClock,
     private val bus: SessionBus,
     private val pipeline: PerceptionPipeline,
+    private val enabled: Set<SensorChannel> = SensorChannel.ALL,
 ) : SensorEventListener {
 
     private var manager: SensorManager? = null
@@ -62,12 +63,17 @@ class SensorSource(
             fail("no accelerometer — impact detection impossible on this device")
             return
         }
-        gyroAvailable = sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null
-        linearAccelAvailable = sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION) != null
+        // Per-session selection: a sub-sensor the user disabled is never
+        // registered — no listener, no callbacks, no battery cost.
+        gyroAvailable = SensorChannel.GYROSCOPE in enabled &&
+            sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null
+        linearAccelAvailable = SensorChannel.LINEAR_ACCEL in enabled &&
+            sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION) != null
         // Tilt from the gravity sensor; on gyro-less devices the rotation
         // vector is the fused alternative that still gives a gravity vector.
-        val gravitySensor = sm.getDefaultSensor(Sensor.TYPE_GRAVITY)
-            ?: sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        val gravitySensor = if (SensorChannel.TILT in enabled) {
+            sm.getDefaultSensor(Sensor.TYPE_GRAVITY) ?: sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        } else null
         tiltAvailable = gravitySensor != null
 
         bus.update {

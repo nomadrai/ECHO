@@ -22,9 +22,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -44,6 +46,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.echo.capture.SensorChannel
+import com.echo.capture.SensorChannelCodec
+import com.echo.capture.SensorSelectionStore
 import com.echo.capture.SessionBusState
 import com.echo.capture.SessionPhase
 import com.echo.capture.SessionService
@@ -62,19 +67,25 @@ fun DashboardRoute(
 ) {
     val context = LocalContext.current
     val state by SessionService.bus.state.collectAsState()
+    val selectionStore = remember { SensorSelectionStore(context) }
 
-    // Ask what the user is building before every capture — the answer is
-    // stored with the session so the AI investigator knows what was supposed
-    // to happen, not just what the sensors saw.
-    var showGoalDialog by remember { mutableStateOf(false) }
-    if (showGoalDialog) {
-        SessionGoalDialog(
-            onDismiss = { showGoalDialog = false },
-            onConfirm = { goal ->
-                showGoalDialog = false
+    // Ask what the user is building — and which sensors to capture — before
+    // every session. The goal is stored with the session so the AI
+    // investigator knows what was supposed to happen; the sensor set controls
+    // what actually records (battery/storage are saved by NOT starting
+    // disabled channels, not by hiding their cards).
+    var showSetupDialog by remember { mutableStateOf(false) }
+    if (showSetupDialog) {
+        SessionSetupDialog(
+            store = selectionStore,
+            onDismiss = { showSetupDialog = false },
+            onConfirm = { goal, channels ->
+                showSetupDialog = false
+                selectionStore.remember(goal, channels)
                 val intent = Intent(context, SessionService::class.java)
                     .setAction(SessionService.ACTION_START)
                     .putExtra(SessionService.EXTRA_GOAL, goal)
+                    .putExtra(SessionService.EXTRA_CHANNELS, SensorChannelCodec.encode(channels))
                 ContextCompat.startForegroundService(context, intent)
             },
         )
@@ -82,7 +93,7 @@ fun DashboardRoute(
 
     DashboardScreen(
         state = state,
-        onStart = { showGoalDialog = true },
+        onStart = { showSetupDialog = true },
         onStop = {
             val intent = Intent(context, SessionService::class.java)
                 .setAction(SessionService.ACTION_STOP)
@@ -94,41 +105,164 @@ fun DashboardRoute(
     )
 }
 
+/**
+ * Pre-session setup: the nature of work plus per-session sensor selection.
+ *
+ * As the user types, a rule-based suggestion ([com.echo.capture.WorkTypeSuggestions])
+ * pre-fills the toggles — instantly, offline. Their own last-used set for
+ * this work type ([SensorSelectionStore]) wins over the built-in suggestion
+ * until they edit the toggles themselves, so a customized "sleeping" set
+ * comes back the next night untouched.
+ */
 @Composable
-private fun SessionGoalDialog(
+private fun SessionSetupDialog(
+    store: SensorSelectionStore,
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
+    onConfirm: (String, Set<SensorChannel>) -> Unit,
 ) {
     var goal by remember { mutableStateOf("") }
-    androidx.compose.material3.AlertDialog(
+    var selected by remember { mutableStateOf(SensorChannel.ALL) }
+    var remembered by remember { mutableStateOf(false) }
+    var lastWorkKey by remember { mutableStateOf<String?>(null) }
+    var userEdited by remember { mutableStateOf(false) }
+
+    fun applyFor(text: String) {
+        val (channels, wasRemembered) = store.resolve(text)
+        selected = channels
+        remembered = wasRemembered
+        userEdited = false
+    }
+
+    fun onGoalChanged(text: String) {
+        goal = text
+        // Re-suggest only when the work TYPE changes ("sleep" → "studying"),
+        // not on every keystroke — manual toggle edits must survive typing.
+        val key = com.echo.capture.WorkKey.normalize(text)
+        if (key != lastWorkKey) {
+            lastWorkKey = key
+            if (!userEdited) applyFor(text)
+        }
+    }
+
+    AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("What are you working on?") },
+        title = { Text("Set up session") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    text = "ECHO stores this with the session so the AI " +
-                        "investigator can judge what it detects against what " +
-                        "you were building.",
+                    text = "What are you working on? ECHO stores this with the " +
+                        "session so the AI investigator can judge what it detects " +
+                        "against what you were building.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
                     value = goal,
-                    onValueChange = { goal = it },
+                    onValueChange = { onGoalChanged(it) },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("e.g. line-following robot, motor rig under load…") },
+                    placeholder = { Text("e.g. motor rig under load, sleeping, studying…") },
                     minLines = 2,
                 )
+                if (remembered) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "Using your saved sensor set for this work type",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "Sensors for this session",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Pre-set for the work you typed — change freely; " +
+                        "your set is remembered per work type.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                ChannelGroup("Capture", listOf(
+                    SensorChannel.CAMERA, SensorChannel.MICROPHONE,
+                ), selected) { c, on ->
+                    selected = if (on) selected + c else selected - c
+                    remembered = false
+                    userEdited = true
+                }
+                ChannelGroup("Motion", listOf(
+                    SensorChannel.ACCELEROMETER, SensorChannel.GYROSCOPE,
+                    SensorChannel.LINEAR_ACCEL, SensorChannel.TILT,
+                ), selected) { c, on ->
+                    selected = if (on) selected + c else selected - c
+                    remembered = false
+                    userEdited = true
+                }
+                ChannelGroup("Environment", listOf(
+                    SensorChannel.MAGNETOMETER, SensorChannel.BAROMETER,
+                    SensorChannel.LIGHT, SensorChannel.PROXIMITY,
+                    SensorChannel.STEPS, SensorChannel.CLIMATE,
+                ), selected) { c, on ->
+                    selected = if (on) selected + c else selected - c
+                    remembered = false
+                    userEdited = true
+                }
+                if (selected.isEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "Enable at least one sensor to start a session.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(goal.trim()) }) { Text("Start session") }
+            TextButton(
+                onClick = { onConfirm(goal.trim(), selected) },
+                enabled = selected.isNotEmpty(),
+            ) { Text("Start session") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+/** One labelled block of sensor toggles inside the setup dialog. */
+@Composable
+private fun ChannelGroup(
+    title: String,
+    channels: List<SensorChannel>,
+    selected: Set<SensorChannel>,
+    onToggle: (SensorChannel, Boolean) -> Unit,
+) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    for (c in channels) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Checkbox(
+                checked = c in selected,
+                onCheckedChange = { on -> onToggle(c, on) },
+            )
+            Column {
+                Text(c.displayName, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = c.purpose,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -224,6 +358,29 @@ fun DashboardScreen(
             )
         }
 
+        if (state.phase == SessionPhase.RECORDING &&
+            state.selectedChannels.isNotEmpty() &&
+            state.selectedChannels != SensorChannel.ALL
+        ) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Active sensors: " + state.selectedChannels
+                    .sortedBy { it.ordinal }.joinToString(" · ") { it.displayName },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+            val disabled = SensorChannel.ALL - state.selectedChannels
+            if (disabled.isNotEmpty()) {
+                Text(
+                    text = "Off for this session: " +
+                        disabled.sortedBy { it.ordinal }.joinToString(" · ") { it.displayName } +
+                        " — these channels capture nothing by your choice.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
         Spacer(Modifier.height(16.dp))
 
         RatesCard(state)
@@ -309,12 +466,14 @@ private fun RatesCard(state: SessionBusState) {
 
 @Composable
 private fun AudioCard(state: SessionBusState) {
+    val off = SensorChannel.MICROPHONE !in state.selectedChannels && state.selectedChannels.isNotEmpty()
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(state.health.audioRunning, state.health.audioError)
+                StatusDot(state.health.audioRunning, state.health.audioError, off)
                 Spacer(Modifier.width(8.dp))
                 SectionLabel("AUDIO")
+                if (off) OffBadge()
             }
             Spacer(Modifier.height(6.dp))
             MeterBar(value = state.audio.rms, max = 0.5, color = MaterialTheme.colorScheme.primary)
@@ -356,12 +515,14 @@ private fun AudioCard(state: SessionBusState) {
 
 @Composable
 private fun VisionCard(state: SessionBusState) {
+    val off = SensorChannel.CAMERA !in state.selectedChannels && state.selectedChannels.isNotEmpty()
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(state.health.cameraRunning, state.health.cameraError)
+                StatusDot(state.health.cameraRunning, state.health.cameraError, off)
                 Spacer(Modifier.width(8.dp))
                 SectionLabel("VISION")
+                if (off) OffBadge()
             }
             Spacer(Modifier.height(6.dp))
             MeterBar(value = state.vision.changedFraction, max = 0.3, color = MaterialTheme.colorScheme.primary)
@@ -381,12 +542,15 @@ private fun VisionCard(state: SessionBusState) {
 
 @Composable
 private fun MotionCard(state: SessionBusState) {
+    val off = state.selectedChannels.isNotEmpty() &&
+        state.selectedChannels.none { it.modality == com.echo.core.model.Modality.MOTION }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(state.health.sensorRunning, state.health.sensorError)
+                StatusDot(state.health.sensorRunning, state.health.sensorError, off)
                 Spacer(Modifier.width(8.dp))
                 SectionLabel("MOTION")
+                if (off) OffBadge()
             }
             Spacer(Modifier.height(6.dp))
             MeterBar(value = state.motion.accelMagnitude, max = 30.0, color = MaterialTheme.colorScheme.primary)
@@ -402,12 +566,15 @@ private fun MotionCard(state: SessionBusState) {
 
 @Composable
 private fun EnvironmentCard(state: SessionBusState) {
+    val off = state.selectedChannels.isNotEmpty() &&
+        state.selectedChannels.none { it.modality == com.echo.core.model.Modality.ENVIRONMENT }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(running = true, error = null)
+                StatusDot(running = true, error = null, off = off)
                 Spacer(Modifier.width(8.dp))
                 SectionLabel("ENVIRONMENT")
+                if (off) OffBadge()
             }
             Spacer(Modifier.height(6.dp))
             val env = state.environment
@@ -589,9 +756,10 @@ private fun EventRow(event: Event) {
 }
 
 @Composable
-private fun StatusDot(running: Boolean, error: String?) {
+private fun StatusDot(running: Boolean, error: String?, off: Boolean = false) {
     val color = when {
         error != null -> MaterialTheme.colorScheme.error
+        off -> MaterialTheme.colorScheme.onSurfaceVariant // off by choice, not broken
         running -> MaterialTheme.colorScheme.secondary
         else -> WarningAmber
     }
@@ -600,6 +768,18 @@ private fun StatusDot(running: Boolean, error: String?) {
             .size(10.dp)
             .clip(CircleShape)
             .background(color),
+    )
+}
+
+/** Grey "not capturing" tag for a modality disabled for this session. */
+@Composable
+private fun OffBadge() {
+    Spacer(Modifier.width(8.dp))
+    Text(
+        text = "OFF THIS SESSION",
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
 

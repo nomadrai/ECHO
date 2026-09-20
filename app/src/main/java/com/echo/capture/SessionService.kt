@@ -17,6 +17,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.echo.R
 import com.echo.core.device.DeviceProfile
+import com.echo.core.model.Modality
 import com.echo.core.time.SessionClock
 import com.echo.data.EchoStore
 import kotlinx.coroutines.delay
@@ -37,6 +38,13 @@ class SessionService : LifecycleService() {
 
         /** What the user said they were building, captured before capture begins. */
         const val EXTRA_GOAL = "com.echo.extra.SESSION_GOAL"
+
+        /**
+         * Comma-joined [SensorChannel] ids enabled for this session
+         * ([SensorChannelCodec]). Absent/empty = capture everything — the
+         * pre-selection behaviour, kept as a safe fallback for raw starts.
+         */
+        const val EXTRA_CHANNELS = "com.echo.extra.SESSION_CHANNELS"
 
         private const val TAG = "EchoSession"
         private const val CHANNEL_ID = "echo_session"
@@ -88,13 +96,16 @@ class SessionService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
-            ACTION_START -> startSession(intent.getStringExtra(EXTRA_GOAL) ?: "")
+            ACTION_START -> startSession(
+                goal = intent.getStringExtra(EXTRA_GOAL) ?: "",
+                channels = SensorChannelCodec.parse(intent.getStringExtra(EXTRA_CHANNELS)),
+            )
             ACTION_STOP -> stopSession()
         }
         return START_STICKY
     }
 
-    private fun startSession(goal: String) {
+    private fun startSession(goal: String, channels: Set<SensorChannel>) {
         val current = bus.state.value
         if (current.phase == SessionPhase.RECORDING || current.phase == SessionPhase.PREPARING) {
             return
@@ -102,18 +113,21 @@ class SessionService : LifecycleService() {
         bus.reset()
         bus.update { it.copy(phase = SessionPhase.PREPARING) }
 
+        // Sensor selection: what the user enabled for THIS session. Empty
+        // (raw start without the extra) = everything, the legacy behaviour.
+        val enabled = if (channels.isEmpty()) SensorChannel.ALL else channels
+        // The camera/mic foreground-service types are requested only when
+        // those channels are actually enabled — a sensor-only session (e.g.
+        // a sleep night) needs no while-in-use permission state at all.
+        val fgsTypes = (if (SensorChannel.CAMERA in enabled) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0) or
+            (if (SensorChannel.MICROPHONE in enabled) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
+
         // startForeground must happen promptly and can itself fail when the
         // camera/mic FGS types are not allowed yet (missing while-in-use
         // permission on API 34+) — fail loudly but never crash.
         val started = runCatching {
             ensureChannel()
-            ServiceCompat.startForeground(
-                this,
-                NOTIFICATION_ID,
-                notification(bus.state.value),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-            )
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(bus.state.value), fgsTypes)
         }
         if (started.isFailure) {
             val message = started.exceptionOrNull()?.message ?: "foreground service rejected"
@@ -161,6 +175,7 @@ class SessionService : LifecycleService() {
                 phase = SessionPhase.RECORDING,
                 startedAtEpochMs = System.currentTimeMillis(),
                 sessionMs = 0,
+                selectedChannels = enabled,
                 motion = it.motion.copy(
                     gyroAvailable = false,
                     linearAccelAvailable = false,
@@ -169,35 +184,50 @@ class SessionService : LifecycleService() {
             )
         }
 
-        // If a permission is missing the session still runs — degraded, and the
-        // dashboard shows exactly which channel is dead (plan §8).
-        if (cameraGranted) {
-            cameraSource = CameraSource(profile, sessionClock, sessionBus, pipeline).also {
-                it.start(this, this)
-            }
-        } else {
-            bus.update {
-                it.copy(health = it.health.copy(cameraError = "CAMERA permission not granted"))
-            }
-        }
-        if (micGranted) {
-            audioSource = AudioSource(profile, sessionClock, sessionBus, pipeline).also {
-                it.start(this)
-            }
-        } else {
-            bus.update {
-                it.copy(health = it.health.copy(audioError = "RECORD_AUDIO permission not granted"))
+        // Only the ENABLED sources are constructed and started — a disabled
+        // channel has no thread, no listener, no camera bind: the battery and
+        // storage savings are real capture work that never happens, not a
+        // display filter. Permission-missing still degrades the channel the
+        // same way as before (dashboard shows why).
+        if (SensorChannel.CAMERA in enabled) {
+            if (cameraGranted) {
+                cameraSource = CameraSource(profile, sessionClock, sessionBus, pipeline).also {
+                    it.start(this, this)
+                }
+            } else {
+                bus.update {
+                    it.copy(health = it.health.copy(cameraError = "CAMERA permission not granted"))
+                }
             }
         }
-        sensorSource = SensorSource(sessionClock, sessionBus, pipeline).also { it.start(this) }
+        if (SensorChannel.MICROPHONE in enabled) {
+            if (micGranted) {
+                audioSource = AudioSource(profile, sessionClock, sessionBus, pipeline).also {
+                    it.start(this)
+                }
+            } else {
+                bus.update {
+                    it.copy(health = it.health.copy(audioError = "RECORD_AUDIO permission not granted"))
+                }
+            }
+        }
+        if (enabled.any { it.modality == Modality.MOTION }) {
+            sensorSource = SensorSource(sessionClock, sessionBus, pipeline, enabled).also { it.start(this) }
+        }
         // Environment sensors (magnetometer, barometer, light, proximity,
         // step counter, temperature/humidity when present): zero permissions,
-        // presence-gated per sensor, all feeding the same pipeline.
-        environmentSource = EnvironmentSource(sessionClock, sessionBus, pipeline).also {
-            it.start(this)
+        // presence-gated per sensor, registration gated per selection.
+        if (enabled.any { it.modality == Modality.ENVIRONMENT }) {
+            environmentSource = EnvironmentSource(sessionClock, sessionBus, pipeline, enabled).also {
+                it.start(this)
+            }
         }
 
-        Log.i(TAG, "session started (tier=${profile.tier}, llm=${profile.llm.name})")
+        Log.i(
+            TAG,
+            "session started (tier=${profile.tier}, llm=${profile.llm.name}, " +
+                "channels=${enabled.joinToString("+") { it.id }})",
+        )
     }
 
     private fun stopSession() {
